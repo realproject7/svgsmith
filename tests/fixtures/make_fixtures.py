@@ -8,6 +8,7 @@ Run with ``python tests/fixtures/make_fixtures.py`` to deterministically rebuild
 - ``photo.png`` — smooth gradients (classifier ``color`` + photo warning)
 - ``noisy.png`` — flat bg + shape + speckle noise (preprocess quantize/denoise)
 - ``flat_bg.png`` — solid bg + centered shape (preprocess background removal)
+- ``trace_illustration.svg`` — VTracer output for ``illustration.png`` (postprocess)
 
 ``logo.png`` / ``illustration.png`` are owned by T2; ``pixel.png`` / ``photo.png``
 were added by T3; ``noisy.png`` / ``flat_bg.png`` were added by T4. All live here
@@ -111,6 +112,14 @@ def make_flat_bg() -> Image.Image:
     return img
 
 
+def make_trace_illustration_svg() -> str:
+    """Raw VTracer SVG for ``illustration.png`` — a multi-color tracer fixture."""
+    # Imported lazily so PNG regeneration does not require the engine deps.
+    from svgsmith.engines import ColorTracer, get_preset
+
+    return ColorTracer().trace(HERE / "illustration.png", get_preset("illustration"))
+
+
 def main() -> None:
     make_logo().save(HERE / "logo.png")
     make_illustration().save(HERE / "illustration.png")
@@ -119,6 +128,7 @@ def main() -> None:
     make_photo().save(HERE / "photo.png")
     make_noisy().save(HERE / "noisy.png")
     make_flat_bg().save(HERE / "flat_bg.png")
+    (HERE / "trace_illustration.svg").write_text(make_trace_illustration_svg())
 
 
 if __name__ == "__main__":
