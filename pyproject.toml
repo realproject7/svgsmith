@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "svgsmith"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Convert raster images into clean, editable SVG."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,6 +33,10 @@ svgsmith = "svgsmith.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Single source of truth for the version: svgsmith.__version__.
+[tool.setuptools.dynamic]
+version = { attr = "svgsmith.__version__" }
 
 [tool.ruff]
 line-length = 100
