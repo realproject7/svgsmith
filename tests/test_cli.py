@@ -3,9 +3,11 @@
 import shutil
 import subprocess
 import sys
+from importlib.metadata import version
 
 import pytest
 
+from svgsmith import __version__
 from svgsmith.cli import EXIT_ERROR, EXIT_OK, main
 
 
@@ -71,3 +73,17 @@ def test_module_invocation_help_exits_zero():
         [sys.executable, "-m", "svgsmith", "--help"], capture_output=True
     )
     assert result.returncode == EXIT_OK
+
+
+def test_version_is_single_sourced():
+    # The distribution version is derived from svgsmith.__version__ (dynamic), so
+    # the package metadata and the module must never drift apart.
+    assert version("svgsmith") == __version__
+
+
+def test_cli_version_matches_package_version():
+    result = subprocess.run(
+        [sys.executable, "-m", "svgsmith", "--version"], capture_output=True, text=True
+    )
+    assert result.returncode == EXIT_OK
+    assert __version__ in result.stdout
