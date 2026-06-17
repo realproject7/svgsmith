@@ -16,6 +16,22 @@ missing for agent use: routing, editable output, and a self-verification loop.
 
 > **Status:** early development. See the [EPIC](../../issues) for the build plan.
 
+## System dependencies
+
+The line-art engine shells out to the [**Potrace**](https://potrace.sourceforge.net/)
+binary (svgsmith does not bundle a Potrace Python binding). Install it from your
+package manager before use:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y potrace
+# macOS (Homebrew)
+brew install potrace
+```
+
+The color engine ([VTracer](https://github.com/visioncortex/vtracer)) ships as a
+pinned PyPI wheel and needs no system package.
+
 ## What makes it different
 
 - **Auto-routing** — classifies the input (logo/icon vs illustration vs pixel art) and

@@ -17,7 +17,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Graphics :: Graphics Conversion",
 ]
-dependencies = []
+dependencies = [
+    "vtracer==0.6.15",
+    "Pillow>=10.4,<13",
+]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.5", "pytest>=8"]
