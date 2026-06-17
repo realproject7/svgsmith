@@ -69,6 +69,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         quality=opts.quality,
         max_iters=opts.max_iters,
         editable=opts.editable,
+        reference=image,  # score against the true original, not the preprocessed image
     )
 
     output = _output_path(input_path, opts.out)
