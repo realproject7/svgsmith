@@ -1,8 +1,9 @@
 """Regenerate the engine + classifier fixtures.
 
 Run with ``python tests/fixtures/make_fixtures.py`` to deterministically rebuild:
-- ``logo.png`` — monochrome line art (engine smoke + classifier ``binary``)
+- ``logo.png`` — monochrome line art (engine smoke + classifier ``binary``/``logo``)
 - ``illustration.png`` — flat multi-color (engine smoke + classifier ``color``)
+- ``icon.png`` — tiny 2-color glyph (classifier ``binary``/``icon``)
 - ``pixel.png`` — tiny low-palette pixel art (classifier ``pixel``)
 - ``photo.png`` — smooth gradients (classifier ``color`` + photo warning)
 
@@ -39,6 +40,15 @@ def make_illustration() -> Image.Image:
     draw.polygon([(40, 88), (16, 88), (28, 44)], fill=(213, 94, 0))  # orange peak
     draw.rectangle((52, 60, 80, 88), fill=(204, 121, 167))  # pink block
     return img
+
+
+def make_icon() -> Image.Image:
+    """A tiny 32x32 black-on-white glyph: monochrome line art at icon scale."""
+    img = Image.new("L", (32, 32), 255)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((6, 6, 25, 25), outline=0, width=3)
+    draw.line((6, 6, 25, 25), fill=0, width=3)
+    return img.convert("RGB")
 
 
 def make_pixel() -> Image.Image:
@@ -79,6 +89,7 @@ def make_photo() -> Image.Image:
 def main() -> None:
     make_logo().save(HERE / "logo.png")
     make_illustration().save(HERE / "illustration.png")
+    make_icon().save(HERE / "icon.png")
     make_pixel().save(HERE / "pixel.png")
     make_photo().save(HERE / "photo.png")
 

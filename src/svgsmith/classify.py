@@ -70,7 +70,14 @@ def classify(image: ImageInput) -> Classification:
     max_dim = max(img.size)
     palette = _palette_size(img)
 
-    # Tiny canvas + small palette → pixel art.
+    # Monochrome-ish + sharp edges → line art. Checked before the pixel-art
+    # branch so a tiny 2-3 color icon reaches `binary`/`icon` instead of being
+    # captured as pixel art (pixel art carries more than a couple of hues).
+    if palette <= BINARY_MAX_PALETTE and _edge_density(img) >= BINARY_MIN_EDGE_DENSITY:
+        preset = "icon" if max_dim <= PIXEL_MAX_DIM else "logo"
+        return Classification("binary", preset, ())
+
+    # Tiny canvas + small (but non-monochrome) palette → pixel art.
     if max_dim <= PIXEL_MAX_DIM and palette <= PIXEL_MAX_PALETTE:
         return Classification("pixel", "pixel", ())
 
@@ -78,11 +85,6 @@ def classify(image: ImageInput) -> Classification:
     # flag the likely bloat for the report to surface.
     if palette >= PHOTO_MIN_PALETTE:
         return Classification("color", "illustration", (PHOTO_WARNING,))
-
-    # Few colors with sharp edges → monochrome line art.
-    if palette <= BINARY_MAX_PALETTE and _edge_density(img) >= BINARY_MIN_EDGE_DENSITY:
-        preset = "icon" if max_dim <= PIXEL_MAX_DIM else "logo"
-        return Classification("binary", preset, ())
 
     # Everything else: flat multi-color illustration.
     return Classification("color", "illustration", ())

@@ -10,6 +10,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 CASES = [
     ("logo.png", "binary", "logo"),
+    ("icon.png", "binary", "icon"),
     ("illustration.png", "color", "illustration"),
     ("pixel.png", "pixel", "pixel"),
     ("photo.png", "color", "illustration"),
