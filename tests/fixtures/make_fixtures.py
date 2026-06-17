@@ -1,9 +1,15 @@
-"""Regenerate the engine smoke fixtures.
+"""Regenerate the engine + classifier fixtures.
 
-Run with ``python tests/fixtures/make_fixtures.py`` to deterministically rebuild
-``logo.png`` (monochrome line art) and ``illustration.png`` (flat multi-color).
-These two images are owned by T2 and reused by #4 and #7; do not mint duplicates
-elsewhere.
+Run with ``python tests/fixtures/make_fixtures.py`` to deterministically rebuild:
+- ``logo.png`` — monochrome line art (engine smoke + classifier ``binary``/``logo``)
+- ``illustration.png`` — flat multi-color (engine smoke + classifier ``color``)
+- ``icon.png`` — tiny 2-color glyph (classifier ``binary``/``icon``)
+- ``pixel.png`` — tiny low-palette pixel art (classifier ``pixel``)
+- ``photo.png`` — smooth gradients (classifier ``color`` + photo warning)
+
+``logo.png`` / ``illustration.png`` are owned by T2; ``pixel.png`` / ``photo.png``
+were added by T3. All live here and are reused downstream — do not mint
+duplicates elsewhere.
 """
 
 from __future__ import annotations
@@ -36,9 +42,56 @@ def make_illustration() -> Image.Image:
     return img
 
 
+def make_icon() -> Image.Image:
+    """A tiny 32x32 black-on-white glyph: monochrome line art at icon scale."""
+    img = Image.new("L", (32, 32), 255)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((6, 6, 25, 25), outline=0, width=3)
+    draw.line((6, 6, 25, 25), fill=0, width=3)
+    return img.convert("RGB")
+
+
+def make_pixel() -> Image.Image:
+    """A 16x16 pixel-art mark with a tiny flat palette and hard pixel grid."""
+    bg = (40, 40, 60)
+    body = (240, 200, 40)
+    eye = (30, 30, 30)
+    mouth = (200, 60, 60)
+    grid = [[bg] * 16 for _ in range(16)]
+    for y in range(3, 13):
+        for x in range(3, 13):
+            grid[y][x] = body
+    for ex, ey in ((6, 6), (9, 6)):
+        grid[ey][ex] = eye
+    for mx in range(6, 10):
+        grid[10][mx] = mouth
+    img = Image.new("RGB", (16, 16))
+    img.putdata([grid[y][x] for y in range(16) for x in range(16)])
+    return img
+
+
+def make_photo() -> Image.Image:
+    """Smooth two-axis gradient: many unique colors, soft edges (photo-like)."""
+    img = Image.new("RGB", (SIZE, SIZE))
+    cx, cy = SIZE / 2, SIZE / 2
+    pixels = []
+    for y in range(SIZE):
+        for x in range(SIZE):
+            r = int(40 + 215 * x / (SIZE - 1))
+            g = int(40 + 215 * y / (SIZE - 1))
+            dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            b = int(255 * max(0.0, 1.0 - dist / (SIZE / 2)))
+            pixels.append((r, g, b))
+    img.putdata(pixels)
+    return img
+
+
 def main() -> None:
     make_logo().save(HERE / "logo.png")
     make_illustration().save(HERE / "illustration.png")
+    make_icon().save(HERE / "icon.png")
+    make_pixel().save(HERE / "pixel.png")
+    make_photo().save(HERE / "photo.png")
 
 
 if __name__ == "__main__":
