@@ -36,15 +36,28 @@ class PostprocessOptions:
     epsilon_ratio: float = 0.0015  # DP epsilon = level * diagonal * ratio
 
 
+# A segment keeps its curve type so simplification can preserve curves:
+#   ("L", end) | ("C", c1, c2, end) | ("Q", c1, end)
+Segment = tuple
+
+
 @dataclass
 class _Subpath:
-    points: list[Point]
+    start: Point
+    segments: list[Segment]
     closed: bool
 
 
 # --------------------------------------------------------------------------- #
 # Path parsing / flattening
 # --------------------------------------------------------------------------- #
+
+
+def _reflect(cx: float, cy: float, ctrl: Point | None) -> Point:
+    """Reflect the previous control point about the current point (for S/T)."""
+    if ctrl is None:
+        return (cx, cy)
+    return (2 * cx - ctrl[0], 2 * cy - ctrl[1])
 
 
 def _cubic(p0: Point, p1: Point, p2: Point, p3: Point, samples: int) -> list[Point]:
@@ -69,16 +82,17 @@ def _quadratic(p0: Point, p1: Point, p2: Point, samples: int) -> list[Point]:
     return out
 
 
-def flatten_path(d: str, samples: int) -> list[_Subpath]:
-    """Parse a path ``d`` string into flattened polyline subpaths.
+def parse_path(d: str) -> list[_Subpath]:
+    """Parse a path ``d`` into typed subpaths, preserving each segment's curve type.
 
-    Supports M/L/H/V/C/S/Q/T/Z in both absolute and relative forms; curves are
-    sampled into line points so Douglas-Peucker can simplify them.
+    Supports M/L/H/V/C/S/Q/T/Z in both absolute and relative forms. H/V become
+    line segments; S/T expand to C/Q using the reflected control point.
     """
     tokens = _TOKEN.findall(d)
     i = 0
     subpaths: list[_Subpath] = []
-    current: list[Point] = []
+    start: Point | None = None
+    segments: list[Segment] = []
     closed = False
     cx = cy = sx = sy = 0.0
     prev_cubic_ctrl: Point | None = None
@@ -86,10 +100,10 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
     command = ""
 
     def flush(close: bool) -> None:
-        nonlocal current
-        if len(current) >= 2:
-            subpaths.append(_Subpath(current, close))
-        current = []
+        nonlocal segments
+        if start is not None and segments:
+            subpaths.append(_Subpath(start, segments, close))
+        segments = []
 
     def num() -> float:
         nonlocal i
@@ -103,10 +117,10 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             command = token
             i += 1
             if command in "Zz":
-                if current:
-                    current.append((sx, sy))
-                    flush(True)
+                closed = True
+                flush(True)
                 cx, cy = sx, sy
+                start = (sx, sy)
                 prev_cubic_ctrl = prev_quad_ctrl = None
                 continue
         relative = command.islower()
@@ -118,9 +132,8 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             x, y = num(), num()
             if relative:
                 x, y = cx + x, cy + y
-            cx, cy = x, y
-            sx, sy = x, y
-            current = [(x, y)]
+            cx, cy = sx, sy = x, y
+            start = (x, y)
             command = "l" if relative else "L"  # subsequent pairs are lineto
             prev_cubic_ctrl = prev_quad_ctrl = None
         elif op == "L":
@@ -128,17 +141,17 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             if relative:
                 x, y = cx + x, cy + y
             cx, cy = x, y
-            current.append((x, y))
+            segments.append(("L", (x, y)))
             prev_cubic_ctrl = prev_quad_ctrl = None
         elif op == "H":
             x = num()
             cx = cx + x if relative else x
-            current.append((cx, cy))
+            segments.append(("L", (cx, cy)))
             prev_cubic_ctrl = prev_quad_ctrl = None
         elif op == "V":
             y = num()
             cy = cy + y if relative else y
-            current.append((cx, cy))
+            segments.append(("L", (cx, cy)))
             prev_cubic_ctrl = prev_quad_ctrl = None
         elif op == "C":
             x1, y1, x2, y2, x, y = num(), num(), num(), num(), num(), num()
@@ -146,7 +159,7 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
                 x1, y1, x2, y2, x, y = (
                     cx + x1, cy + y1, cx + x2, cy + y2, cx + x, cy + y,
                 )
-            current += _cubic((cx, cy), (x1, y1), (x2, y2), (x, y), samples)
+            segments.append(("C", (x1, y1), (x2, y2), (x, y)))
             prev_cubic_ctrl = (x2, y2)
             prev_quad_ctrl = None
             cx, cy = x, y
@@ -154,11 +167,8 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             x2, y2, x, y = num(), num(), num(), num()
             if relative:
                 x2, y2, x, y = cx + x2, cy + y2, cx + x, cy + y
-            if prev_cubic_ctrl:
-                c1 = (2 * cx - prev_cubic_ctrl[0], 2 * cy - prev_cubic_ctrl[1])
-            else:
-                c1 = (cx, cy)
-            current += _cubic((cx, cy), c1, (x2, y2), (x, y), samples)
+            c1 = _reflect(cx, cy, prev_cubic_ctrl)
+            segments.append(("C", c1, (x2, y2), (x, y)))
             prev_cubic_ctrl = (x2, y2)
             prev_quad_ctrl = None
             cx, cy = x, y
@@ -166,7 +176,7 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             x1, y1, x, y = num(), num(), num(), num()
             if relative:
                 x1, y1, x, y = cx + x1, cy + y1, cx + x, cy + y
-            current += _quadratic((cx, cy), (x1, y1), (x, y), samples)
+            segments.append(("Q", (x1, y1), (x, y)))
             prev_quad_ctrl = (x1, y1)
             prev_cubic_ctrl = None
             cx, cy = x, y
@@ -174,11 +184,8 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
             x, y = num(), num()
             if relative:
                 x, y = cx + x, cy + y
-            if prev_quad_ctrl:
-                c1 = (2 * cx - prev_quad_ctrl[0], 2 * cy - prev_quad_ctrl[1])
-            else:
-                c1 = (cx, cy)
-            current += _quadratic((cx, cy), c1, (x, y), samples)
+            c1 = _reflect(cx, cy, prev_quad_ctrl)
+            segments.append(("Q", c1, (x, y)))
             prev_quad_ctrl = c1
             prev_cubic_ctrl = None
             cx, cy = x, y
@@ -189,26 +196,70 @@ def flatten_path(d: str, samples: int) -> list[_Subpath]:
     return subpaths
 
 
-def _anchor_count(d: str) -> int:
-    """Count on-curve anchor points (M/L/H/V and curve endpoints; Z excluded)."""
-    tokens = _TOKEN.findall(d)
+def _flatten_segment(p0: Point, seg: Segment, samples: int) -> list[Point]:
+    kind = seg[0]
+    if kind == "C":
+        return _cubic(p0, seg[1], seg[2], seg[3], samples)
+    if kind == "Q":
+        return _quadratic(p0, seg[1], seg[2], samples)
+    return [seg[-1]]
+
+
+def _subpath_points(sub: _Subpath, samples: int) -> list[Point]:
+    points = [sub.start]
+    p = sub.start
+    for seg in sub.segments:
+        points.extend(_flatten_segment(p, seg, samples))
+        p = seg[-1]
+    if sub.closed:
+        points.append(sub.start)
+    return points
+
+
+def _is_linear_segment(p0: Point, seg: Segment, epsilon: float) -> bool:
+    """True for a line, or a curve whose control points hug its chord."""
+    if seg[0] == "L":
+        return True
+    end = seg[-1]
+    return all(_perpendicular_distance(c, p0, end) <= epsilon for c in seg[1:-1])
+
+
+def simplify_subpath(sub: _Subpath, epsilon: float) -> _Subpath:
+    """Collapse runs of effectively-linear segments with Douglas-Peucker.
+
+    Genuinely-curved segments are kept verbatim, so the output is never coarser
+    than its input — only redundant straight runs (common in tracer output where
+    one edge is split into many collinear segments) are reduced.
+    """
+    if epsilon <= 0 or not sub.segments:
+        return sub
+
+    flags = []
+    p = sub.start
+    for seg in sub.segments:
+        flags.append(_is_linear_segment(p, seg, epsilon))
+        p = seg[-1]
+
+    result: list[Segment] = []
+    p = sub.start
     i = 0
-    count = 0
-    command = ""
-    consumes = {"M": 2, "L": 2, "H": 1, "V": 1, "C": 6, "S": 4, "Q": 4, "T": 2}
-    while i < len(tokens):
-        token = tokens[i]
-        if token.isalpha():
-            command = token
-            i += 1
-            continue
-        op = command.upper()
-        if op in consumes:
-            i += consumes[op]
-            count += 1
+    n = len(sub.segments)
+    while i < n:
+        if flags[i]:
+            run = [p]
+            j = i
+            while j < n and flags[j]:
+                run.append(sub.segments[j][-1])
+                j += 1
+            for point in douglas_peucker(run, epsilon)[1:]:
+                result.append(("L", point))
+            p = run[-1]
+            i = j
         else:
+            result.append(sub.segments[i])
+            p = sub.segments[i][-1]
             i += 1
-    return count
+    return _Subpath(sub.start, result, sub.closed)
 
 
 # --------------------------------------------------------------------------- #
@@ -334,17 +385,21 @@ def _format_number(value: float, precision: int) -> str:
 
 
 def _emit_d(subpaths: list[_Subpath], precision: int) -> str:
+    def fmt(p: Point) -> str:
+        return f"{_format_number(p[0], precision)} {_format_number(p[1], precision)}"
+
     chunks: list[str] = []
     for sub in subpaths:
-        points = sub.points
-        if sub.closed and len(points) > 1 and points[0] == points[-1]:
-            points = points[:-1]
-        if len(points) < 2:
+        if not sub.segments:
             continue
-        fx, fy = points[0]
-        chunks.append(f"M{_format_number(fx, precision)} {_format_number(fy, precision)}")
-        for x, y in points[1:]:
-            chunks.append(f"L{_format_number(x, precision)} {_format_number(y, precision)}")
+        chunks.append(f"M{fmt(sub.start)}")
+        for seg in sub.segments:
+            if seg[0] == "C":
+                chunks.append(f"C{fmt(seg[1])} {fmt(seg[2])} {fmt(seg[3])}")
+            elif seg[0] == "Q":
+                chunks.append(f"Q{fmt(seg[1])} {fmt(seg[2])}")
+            else:
+                chunks.append(f"L{fmt(seg[1])}")
         if sub.closed:
             chunks.append("Z")
     return "".join(chunks)
@@ -374,16 +429,13 @@ def postprocess(svg_str: str, opts: PostprocessOptions | None = None) -> str:
             if norm:
                 path["fill"] = mapping.get(norm, norm)
 
-    # Simplify each path's geometry. Douglas-Peucker runs over the on-curve
-    # anchors (flatten with samples=1) so the retained points are always a
-    # subset of the originals — simplification can never inflate the point
-    # count. Redundant collinear anchors (common in tracer output) drop losslessly.
+    # Simplify each path's geometry. Genuinely-curved segments are preserved
+    # verbatim; only runs of effectively-linear segments are reduced (tracer
+    # output commonly splits one straight edge into many collinear segments).
+    # So the output is never coarser than its input.
     if opts.simplify_level > 0:
         for path in paths:
-            subpaths = flatten_path(path["d"], samples=1)
-            simplified = [
-                _Subpath(douglas_peucker(s.points, epsilon), s.closed) for s in subpaths
-            ]
+            simplified = [simplify_subpath(s, epsilon) for s in parse_path(path["d"])]
             new_d = _emit_d(simplified, opts.precision)
             if new_d:
                 path["d"] = new_d
@@ -452,9 +504,13 @@ def _append_path(parent: ET.Element, path: dict, include_fill: bool) -> None:
 
 
 def count_path_points(svg_str: str) -> int:
-    """Total on-curve anchor points across every ``<path>`` in the SVG."""
+    """Total on-curve anchor points (start + one per segment) across all paths."""
     root = ET.fromstring(svg_str)
-    return sum(_anchor_count(p["d"]) for p in _collect_paths(root))
+    return sum(
+        1 + len(sub.segments)
+        for p in _collect_paths(root)
+        for sub in parse_path(p["d"])
+    )
 
 
 def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, float] | None:
@@ -463,8 +519,8 @@ def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, floa
     xs: list[float] = []
     ys: list[float] = []
     for path in _collect_paths(root):
-        for sub in flatten_path(path["d"], samples):
-            for x, y in sub.points:
+        for sub in parse_path(path["d"]):
+            for x, y in _subpath_points(sub, samples):
                 xs.append(x)
                 ys.append(y)
     if not xs:

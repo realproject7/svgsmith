@@ -48,6 +48,23 @@ def test_point_count_strictly_reduced_at_default():
     assert count_path_points(out) < count_path_points(TRACE_SVG)
 
 
+def _curve_command_count(svg: str) -> int:
+    root = ET.fromstring(svg)
+    return sum(
+        el.get("d", "").count("C") + el.get("d", "").count("Q")
+        for el in root.iter()
+        if el.tag == f"{{{SVG_NS}}}path"
+    )
+
+
+def test_curves_survive_default_simplification():
+    # The input is curve-based; postprocess must not polygonalize it into a
+    # coarser, all-straight-line result at the conservative default.
+    assert _curve_command_count(TRACE_SVG) > 0
+    out = postprocess(TRACE_SVG)
+    assert _curve_command_count(out) > 0
+
+
 def test_color_count_not_increased():
     out = postprocess(TRACE_SVG)
     assert len(_fill_colors(out)) <= len(_fill_colors(TRACE_SVG))
