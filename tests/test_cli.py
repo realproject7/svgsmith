@@ -60,6 +60,23 @@ def test_invalid_mode_is_usage_error():
     assert excinfo.value.code == 2  # argparse usage error
 
 
+@pytest.mark.parametrize("bad_quality", ["-1", "1.5"])
+def test_out_of_range_quality_is_rejected_before_conversion(bad_quality, capsys):
+    # Rejected up front (exit 1) — never reaches conversion or reports "pass".
+    code = main(["convert", "any.png", "--quality", bad_quality])
+    assert code == EXIT_ERROR
+    assert "quality" in capsys.readouterr().err.lower()
+
+
+def test_zero_max_iters_is_rejected_with_clear_error(capsys):
+    # Previously fell through to an opaque "conversion failed:" path.
+    code = main(["convert", "any.png", "--max-iters", "0"])
+    assert code == EXIT_ERROR
+    err = capsys.readouterr().err.lower()
+    assert "max-iters" in err
+    assert "conversion failed" not in err
+
+
 def test_console_entrypoint_help_exits_zero():
     executable = shutil.which("svgsmith")
     if executable is None:

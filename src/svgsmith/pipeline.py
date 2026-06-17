@@ -32,6 +32,12 @@ class ConvertOptions:
     editable: bool = True
     out: str | None = None
 
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.quality <= 1.0:
+            raise ValueError(f"quality must be in [0, 1], got {self.quality}")
+        if self.max_iters < 1:
+            raise ValueError(f"max_iters must be >= 1, got {self.max_iters}")
+
 
 def _resolve_classification(image, mode: str) -> Classification:
     """Classify the image; honor an explicit --mode while keeping any warnings."""
