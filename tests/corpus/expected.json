@@ -1,0 +1,62 @@
+{
+  "logo/logo_bars.png": {
+    "mode": "binary",
+    "min_similarity": 0.87,
+    "max_paths": 6,
+    "max_bytes": 1073
+  },
+  "logo/logo_ring.png": {
+    "mode": "binary",
+    "min_similarity": 0.89,
+    "max_paths": 6,
+    "max_bytes": 1446
+  },
+  "icon/icon_arrow.png": {
+    "mode": "binary",
+    "min_similarity": 0.91,
+    "max_paths": 6,
+    "max_bytes": 820
+  },
+  "icon/icon_cross.png": {
+    "mode": "binary",
+    "min_similarity": 0.83,
+    "max_paths": 6,
+    "max_bytes": 1091
+  },
+  "illustration/illustration_blocks.png": {
+    "mode": "color",
+    "min_similarity": 0.92,
+    "max_paths": 12,
+    "max_bytes": 1961
+  },
+  "illustration/illustration_scene.png": {
+    "mode": "color",
+    "min_similarity": 0.75,
+    "max_paths": 12,
+    "max_bytes": 1840
+  },
+  "photo/photo_linear.png": {
+    "mode": "color",
+    "min_similarity": 0.78,
+    "max_paths": 6,
+    "max_bytes": 530
+  },
+  "photo/photo_radial.png": {
+    "mode": "color",
+    "min_similarity": 0.54,
+    "max_paths": 6,
+    "max_bytes": 790
+  },
+  "pixel/pixel_face.png": {
+    "mode": "pixel",
+    "min_similarity": 0.83,
+    "max_paths": 12,
+    "max_bytes": 1097
+  },
+  "pixel/pixel_heart.png": {
+    "mode": "pixel",
+    "min_similarity": 0.68,
+    "max_paths": 32,
+    "max_bytes": 3259
+  }
+}

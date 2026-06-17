@@ -42,3 +42,6 @@ jobs:
 
       - name: Tests (pytest)
         run: pytest
+
+      - name: Quality gate (corpus golden thresholds)
+        run: pytest tests/test_corpus.py -v

@@ -50,9 +50,17 @@ def rasterize(svg: str, size: tuple[int, int], renderer: str | None = None) -> I
     """
     width, height = size
     if renderer == "resvg" and shutil.which("resvg") is not None:
-        return _rasterize_resvg(svg, width, height)
-    png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=width, output_height=height)
-    return Image.open(io.BytesIO(png)).convert("RGB")
+        rendered = _rasterize_resvg(svg, width, height)
+    else:
+        png = cairosvg.svg2png(
+            bytestring=svg.encode("utf-8"), output_width=width, output_height=height
+        )
+        rendered = Image.open(io.BytesIO(png)).convert("RGBA")
+    # Flatten transparency onto white so monochrome/line-art output (which traces
+    # ink on a transparent canvas) is scored against the original's light
+    # background rather than turning transparent pixels black.
+    background = Image.new("RGBA", rendered.size, (255, 255, 255, 255))
+    return Image.alpha_composite(background, rendered).convert("RGB")
 
 
 def _rasterize_resvg(svg: str, width: int, height: int) -> Image.Image:
@@ -65,7 +73,7 @@ def _rasterize_resvg(svg: str, width: int, height: int) -> Image.Image:
             check=True,
             capture_output=True,
         )
-        return Image.open(dst).convert("RGB")
+        return Image.open(dst).convert("RGBA")
 
 
 def score(original: Image.Image, rendered: Image.Image) -> float:
@@ -105,6 +113,7 @@ def run_loop(
     max_iters: int = 4,
     renderer: str | None = None,
     editable: bool = True,
+    reference: ImageInput | None = None,
 ) -> tuple[str, VerifyResult]:
     """Trace+postprocess, score, and re-tune up to ``max_iters``; return the best.
 
@@ -115,10 +124,23 @@ def run_loop(
     the score stays at or above the target. If the first pass already meets the
     target, it returns immediately (cost discipline).
 
+    ``image`` is what gets traced; ``reference`` is what the render is scored
+    against (defaults to ``image``). The pipeline passes the *preprocessed* image
+    to trace but the *original* as ``reference``, so similarity reflects fidelity
+    to the true input rather than to the intermediate.
+
     With ``editable=False`` the postprocess step is skipped and the raw traced
     SVG is scored and returned (the ``simplify_level`` ramp then has no effect).
     """
-    original = load_image(image, "RGB")
+    trace_image = load_image(image, "RGBA")
+    original = load_image(reference, "RGB") if reference is not None else trace_image.convert("RGB")
+    # Score at the resolution the SVG is defined at (the trace size). When the
+    # input was upscaled (tiny pixel art), resize the reference up with nearest
+    # so the crisp grid is compared like-for-like instead of against an
+    # antialiased downscale.
+    target_size = trace_image.size
+    if original.size != target_size:
+        original = original.resize(target_size, Image.Resampling.NEAREST)
     base = get_preset(classification.preset)
     mode = classification.mode
 
@@ -137,7 +159,7 @@ def run_loop(
             simplify_level += 1.0
 
         preset = _tune_preset(base, color_level)
-        svg = _trace_and_post(original, mode, preset, simplify_level, editable)
+        svg = _trace_and_post(trace_image, mode, preset, simplify_level, editable)
         current = score(original, rasterize(svg, original.size, renderer))
         scores.append(current)
         params = {
