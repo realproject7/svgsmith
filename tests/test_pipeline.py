@@ -15,6 +15,15 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ALL_FIXTURES = ["logo.png", "illustration.png", "icon.png", "pixel.png", "photo.png"]
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"quality": -0.1}, {"quality": 1.1}, {"max_iters": 0}],
+)
+def test_convert_options_rejects_out_of_range_values(kwargs):
+    with pytest.raises(ValueError):
+        ConvertOptions(**kwargs)
+
+
 @pytest.mark.parametrize("name", ALL_FIXTURES)
 def test_convert_produces_valid_svg_and_consistent_report(name):
     svg, report = convert(str(FIXTURES / name), ConvertOptions(max_iters=2))

@@ -37,6 +37,15 @@ def _convert(args: argparse.Namespace) -> int:
         _log("error: an input image path is required")
         return EXIT_ERROR
 
+    # Validate bounds before any conversion work so invalid input fails fast
+    # with a clear message instead of an opaque downstream error.
+    if not 0.0 <= args.quality <= 1.0:
+        _log(f"error: --quality must be between 0 and 1 (got {args.quality})")
+        return EXIT_ERROR
+    if args.max_iters < 1:
+        _log(f"error: --max-iters must be at least 1 (got {args.max_iters})")
+        return EXIT_ERROR
+
     opts = ConvertOptions(
         mode=args.mode,
         quality=args.quality,
