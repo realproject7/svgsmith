@@ -359,8 +359,8 @@ def postprocess(svg_str: str, opts: PostprocessOptions | None = None) -> str:
     """Return an editable SVG: simplified paths, grouped layers, merged palette."""
     opts = opts or PostprocessOptions()
     source = ET.fromstring(svg_str)
-    width, height, view_box = _dimensions(source)
-    diagonal = (width**2 + height**2) ** 0.5
+    geom_width, geom_height = _geometry_size(source)
+    diagonal = (geom_width**2 + geom_height**2) ** 0.5
     epsilon = opts.simplify_level * diagonal * opts.epsilon_ratio
 
     paths = _collect_paths(source)
@@ -388,34 +388,40 @@ def postprocess(svg_str: str, opts: PostprocessOptions | None = None) -> str:
             if new_d:
                 path["d"] = new_d
 
-    return _build_svg(width, height, view_box, paths, opts.group)
+    return _build_svg(source, paths, opts.group)
 
 
-def _dimensions(root: ET.Element) -> tuple[float, float, str | None]:
+def _length(value: str | None) -> float:
+    """Parse the leading number from an SVG length (drops units like px/%)."""
+    if not value:
+        return 0.0
+    match = re.match(r"[-+]?(?:\d*\.\d+|\d+\.?)", value.strip())
+    return float(match.group()) if match else 0.0
+
+
+def _geometry_size(root: ET.Element) -> tuple[float, float]:
+    """Coordinate-space size used for epsilon scaling.
+
+    Uses the ``viewBox`` extents when present (path coordinates live in that
+    space); otherwise the root ``width``/``height``. This is independent of the
+    rendered ``width``/``height`` attributes, which are preserved verbatim.
+    """
     view_box = root.get("viewBox")
     if view_box:
         parts = [float(v) for v in view_box.replace(",", " ").split()]
-        return parts[2], parts[3], view_box
-    width = float(re.sub(r"[a-z%]+$", "", root.get("width", "0")) or 0)
-    height = float(re.sub(r"[a-z%]+$", "", root.get("height", "0")) or 0)
-    return width, height, None
+        if len(parts) == 4:
+            return parts[2], parts[3]
+    return _length(root.get("width")), _length(root.get("height"))
 
 
-def _build_svg(
-    width: float,
-    height: float,
-    view_box: str | None,
-    paths: list[dict],
-    group: bool,
-) -> str:
+def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
     ET.register_namespace("", SVG_NS)
-    svg = ET.Element(f"{{{SVG_NS}}}svg", {"version": "1.1"})
-    if view_box:
-        svg.set("viewBox", view_box)
-    if width:
-        svg.set("width", _format_number(width, 2))
-    if height:
-        svg.set("height", _format_number(height, 2))
+    svg = ET.Element(f"{{{SVG_NS}}}svg", {"version": source.get("version", "1.1")})
+    # Preserve the root sizing attributes exactly as authored.
+    for attr in ("viewBox", "width", "height"):
+        value = source.get(attr)
+        if value is not None:
+            svg.set(attr, value)
 
     if group:
         by_fill: dict[str, list[dict]] = {}

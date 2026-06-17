@@ -72,6 +72,19 @@ def test_viewbox_or_dimensions_preserved():
     assert out_root.get("height") == src_root.get("height")
 
 
+def test_explicit_dimensions_kept_alongside_viewbox():
+    # width/height must be preserved verbatim, not overwritten by viewBox extents.
+    svg = (
+        f'<svg xmlns="{SVG_NS}" width="200" height="100" viewBox="0 0 20 10">'
+        '<path d="M0 0 L20 0 L20 10 L0 10 Z" fill="#123456"/>'
+        "</svg>"
+    )
+    out_root = ET.fromstring(postprocess(svg))
+    assert out_root.get("width") == "200"
+    assert out_root.get("height") == "100"
+    assert out_root.get("viewBox") == "0 0 20 10"
+
+
 def test_simplify_level_zero_keeps_points():
     out = postprocess(TRACE_SVG, PostprocessOptions(simplify_level=0))
     assert count_path_points(out) == count_path_points(TRACE_SVG)
