@@ -28,6 +28,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["ruff>=0.5", "pytest>=8"]
 
+[project.urls]
+Homepage = "https://github.com/realproject7/svgsmith"
+Repository = "https://github.com/realproject7/svgsmith"
+Issues = "https://github.com/realproject7/svgsmith/issues"
+
 [project.scripts]
 svgsmith = "svgsmith.cli:main"
 
