@@ -53,6 +53,28 @@ def test_result_reports_scores_params_and_iterations():
         assert key in result.params
 
 
+def test_returns_best_scoring_result():
+    cls = classify(ILLUSTRATION)
+    _svg, result = run_loop(ILLUSTRATION, cls, quality=0.8, max_iters=4)
+    # The returned result must be the highest-scoring iteration, not merely the
+    # last one that stayed above target.
+    assert result.best_score == max(result.scores)
+
+
+def test_default_renderer_is_cairosvg_even_if_resvg_present(monkeypatch):
+    import svgsmith.verify as verify_module
+
+    # Pretend resvg is installed; the default path must still NOT call it.
+    monkeypatch.setattr(verify_module.shutil, "which", lambda _name: "/usr/bin/resvg")
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("resvg should not be used by the default renderer")
+
+    monkeypatch.setattr(verify_module, "_rasterize_resvg", _fail)
+    img = rasterize(SIMPLE_SVG, (32, 32))  # renderer=None default
+    assert img.size == (32, 32)
+
+
 def test_iteration_count_never_exceeds_max_iters():
     cls = classify(ILLUSTRATION)
     for max_iters in (1, 2, 3):

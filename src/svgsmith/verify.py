@@ -44,13 +44,12 @@ class VerifyResult:
 def rasterize(svg: str, size: tuple[int, int], renderer: str | None = None) -> Image.Image:
     """Render an SVG string to an RGB raster at ``size`` (width, height).
 
-    Uses ``cairosvg`` by default (pip-installable, self-contained in CI). If the
-    ``resvg`` binary is present it is used instead, unless ``renderer`` forces a
-    choice (``"cairosvg"`` or ``"resvg"``).
+    Uses ``cairosvg`` by default (pip-installable, self-contained in CI). The
+    ``resvg`` binary is used only when explicitly requested (``renderer="resvg"``)
+    *and* present on PATH; otherwise it falls back to ``cairosvg``.
     """
     width, height = size
-    chosen = renderer or ("resvg" if shutil.which("resvg") else "cairosvg")
-    if chosen == "resvg":
+    if renderer == "resvg" and shutil.which("resvg") is not None:
         return _rasterize_resvg(svg, width, height)
     png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=width, output_height=height)
     return Image.open(io.BytesIO(png)).convert("RGB")
@@ -137,18 +136,17 @@ def run_loop(
             "simplify_level": simplify_level,
         }
 
+        # Always keep the strictly best-scoring result.
+        if best is None or current > best["score"]:
+            best = {"score": current, "svg": svg, "params": params}
+
         if not reached:
-            if best is None or current > best["score"]:
-                best = {"score": current, "svg": svg, "params": params}
             if current >= quality:
                 reached = True
                 if iteration == 0:
                     break  # first pass already good enough — don't keep iterating
-        else:
-            if current >= quality:
-                best = {"score": current, "svg": svg, "params": params}
-            else:
-                break  # simplifying dropped us below target; keep the prior best
+        elif current < quality:
+            break  # simplifying dropped us below target; keep the best result
 
     assert best is not None  # max_iters >= 1, so the loop always records one result
     return best["svg"], VerifyResult(
