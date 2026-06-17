@@ -6,14 +6,17 @@ Run with ``python tests/fixtures/make_fixtures.py`` to deterministically rebuild
 - ``icon.png`` — tiny 2-color glyph (classifier ``binary``/``icon``)
 - ``pixel.png`` — tiny low-palette pixel art (classifier ``pixel``)
 - ``photo.png`` — smooth gradients (classifier ``color`` + photo warning)
+- ``noisy.png`` — flat bg + shape + speckle noise (preprocess quantize/denoise)
+- ``flat_bg.png`` — solid bg + centered shape (preprocess background removal)
 
 ``logo.png`` / ``illustration.png`` are owned by T2; ``pixel.png`` / ``photo.png``
-were added by T3. All live here and are reused downstream — do not mint
-duplicates elsewhere.
+were added by T3; ``noisy.png`` / ``flat_bg.png`` were added by T4. All live here
+and are reused downstream — do not mint duplicates elsewhere.
 """
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -86,12 +89,36 @@ def make_photo() -> Image.Image:
     return img
 
 
+def make_noisy() -> Image.Image:
+    """Flat gray bg + a solid shape + seeded salt-and-pepper speckle noise."""
+    img = Image.new("RGB", (SIZE, SIZE), (200, 200, 200))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((40, 40, 88, 88), fill=(40, 40, 160))
+    rng = random.Random(20240617)  # seeded → deterministic fixture
+    for _ in range(320):
+        x = rng.randrange(SIZE)
+        y = rng.randrange(SIZE)
+        color = (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+        img.putpixel((x, y), color)
+    return img
+
+
+def make_flat_bg() -> Image.Image:
+    """Solid white background with a centered opaque red disc."""
+    img = Image.new("RGB", (SIZE, SIZE), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((40, 40, 88, 88), fill=(220, 30, 30))
+    return img
+
+
 def main() -> None:
     make_logo().save(HERE / "logo.png")
     make_illustration().save(HERE / "illustration.png")
     make_icon().save(HERE / "icon.png")
     make_pixel().save(HERE / "pixel.png")
     make_photo().save(HERE / "photo.png")
+    make_noisy().save(HERE / "noisy.png")
+    make_flat_bg().save(HERE / "flat_bg.png")
 
 
 if __name__ == "__main__":
