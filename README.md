@@ -24,11 +24,14 @@ The line-art engine shells out to the [**Potrace**](https://potrace.sourceforge.
 binary (svgsmith does not bundle a Potrace Python binding). Install it from your
 package manager before use:
 
+The self-verify loop rasterizes SVGs with [CairoSVG](https://cairosvg.org/), which needs
+the **Cairo** system library. Install both:
+
 ```bash
 # Debian / Ubuntu
-sudo apt-get install -y potrace
+sudo apt-get install -y potrace libcairo2 libcairo2-dev
 # macOS (Homebrew)
-brew install potrace
+brew install potrace cairo
 ```
 
 The color engine ([VTracer](https://github.com/visioncortex/vtracer)) ships as a
