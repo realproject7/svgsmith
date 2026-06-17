@@ -1,32 +1,80 @@
 """Command-line interface for svgsmith.
 
 This module wires up the ``svgsmith`` console entrypoint and its ``convert``
-subcommand. The flag contract here is binding for the rest of the project; the
-conversion engine itself lands in later tickets (T2–T7), so an actual
-``convert`` invocation raises :class:`NotImplementedError` for now while
-``--help`` still short-circuits and exits cleanly.
+subcommand. ``convert`` runs the full pipeline (classify → preprocess → trace →
+postprocess → verify) and, with ``--report json``, prints the canonical JSON
+report to stdout — and nothing else: all logs and errors go to stderr.
+
+Exit codes:
+    0  success (similarity met the --quality threshold)
+    2  an SVG was produced but its similarity is below --quality
+    1  hard error (could not produce output)
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from svgsmith import __version__
+from svgsmith.pipeline import MODES, ConvertOptions, convert
 
-# Reserved process exit codes. Later tickets (see #8) map failures onto these;
-# argparse already emits EXIT_USAGE for malformed command lines.
+# Process exit codes (documented in the module docstring and --help epilog).
 EXIT_OK = 0
 EXIT_ERROR = 1
-EXIT_USAGE = 2
+EXIT_BELOW_THRESHOLD = 2
+
+
+def _log(message: str) -> None:
+    """Write a human-facing line to stderr (stdout is reserved for the report)."""
+    print(message, file=sys.stderr)
 
 
 def _convert(args: argparse.Namespace) -> int:
     """Handle ``svgsmith convert`` once arguments have been parsed."""
-    raise NotImplementedError(
-        "svgsmith convert is not wired up yet — the conversion engine arrives "
-        "in a later ticket. Run `svgsmith convert --help` to see the flags."
+    if not args.input:
+        _log("error: an input image path is required")
+        return EXIT_ERROR
+
+    opts = ConvertOptions(
+        mode=args.mode,
+        quality=args.quality,
+        max_iters=args.max_iters,
+        editable=args.editable,
+        out=args.out,
     )
+
+    try:
+        svg, report = convert(args.input, opts)
+    except FileNotFoundError:
+        _log(f"error: input not found: {args.input}")
+        return EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - surface any failure as a hard error
+        _log(f"error: conversion failed: {exc}")
+        return EXIT_ERROR
+
+    try:
+        with open(report.output, "w", encoding="utf-8") as handle:
+            handle.write(svg)
+    except OSError as exc:
+        _log(f"error: could not write output {report.output!r}: {exc}")
+        return EXIT_ERROR
+
+    if args.report == "json":
+        # stdout carries the report and nothing else.
+        print(report.to_json())
+    else:
+        _log(
+            f"wrote {report.output} "
+            f"(mode={report.mode_used}, similarity={report.similarity:.3f}, "
+            f"passed={report.passed_threshold})"
+        )
+
+    for warning in report.warnings:
+        _log(f"warning: {warning}")
+
+    return EXIT_OK if report.passed_threshold else EXIT_BELOW_THRESHOLD
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
         "convert",
         help="Convert a raster image into SVG.",
         description="Convert a raster image into clean, editable SVG.",
+        epilog=(
+            "exit codes: 0 success (similarity >= --quality); "
+            "2 SVG produced but below --quality; 1 hard error."
+        ),
     )
     convert.add_argument(
         "input",
@@ -55,8 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert.add_argument(
         "--mode",
+        choices=list(MODES),
         default="auto",
-        help="Conversion mode (default: auto).",
+        help="Conversion mode: auto|binary|color|pixel (default: auto).",
     )
     convert.add_argument(
         "--quality",
@@ -74,12 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--editable",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Emit editable, human-friendly SVG (default: on).",
+        help=(
+            "Emit editable, grouped/simplified SVG (default: on). "
+            "Use --no-editable to skip postprocessing and emit the raw traced SVG."
+        ),
     )
     convert.add_argument(
         "--out",
         default=None,
-        help="Output path; defaults to stdout when omitted.",
+        help="Output SVG path (default: input path with a .svg extension).",
     )
     convert.add_argument(
         "--report",

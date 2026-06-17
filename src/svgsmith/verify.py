@@ -84,9 +84,17 @@ def _tune_preset(base: Preset, color_level: int) -> Preset:
     return replace(base, color_precision=color_precision, filter_speckle=filter_speckle)
 
 
-def _trace_and_post(image: Image.Image, mode: str, preset: Preset, simplify_level: float) -> str:
+def _trace_and_post(
+    image: Image.Image,
+    mode: str,
+    preset: Preset,
+    simplify_level: float,
+    editable: bool = True,
+) -> str:
     engine = BinaryTracer() if mode == "binary" else ColorTracer()
     raw = engine.trace(image, preset)
+    if not editable:
+        return raw  # --no-editable: emit the raw traced SVG, skip postprocess
     return postprocess(raw, PostprocessOptions(simplify_level=simplify_level))
 
 
@@ -96,6 +104,7 @@ def run_loop(
     quality: float = 0.9,
     max_iters: int = 4,
     renderer: str | None = None,
+    editable: bool = True,
 ) -> tuple[str, VerifyResult]:
     """Trace+postprocess, score, and re-tune up to ``max_iters``; return the best.
 
@@ -105,6 +114,9 @@ def run_loop(
     remaining budget raising ``simplify_level`` (fewer points) — but only while
     the score stays at or above the target. If the first pass already meets the
     target, it returns immediately (cost discipline).
+
+    With ``editable=False`` the postprocess step is skipped and the raw traced
+    SVG is scored and returned (the ``simplify_level`` ramp then has no effect).
     """
     original = load_image(image, "RGB")
     base = get_preset(classification.preset)
@@ -125,7 +137,7 @@ def run_loop(
             simplify_level += 1.0
 
         preset = _tune_preset(base, color_level)
-        svg = _trace_and_post(original, mode, preset, simplify_level)
+        svg = _trace_and_post(original, mode, preset, simplify_level, editable)
         current = score(original, rasterize(svg, original.size, renderer))
         scores.append(current)
         params = {

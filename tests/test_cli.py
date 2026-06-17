@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from svgsmith.cli import EXIT_OK, main
+from svgsmith.cli import EXIT_ERROR, EXIT_OK, main
 
 
 def test_root_help_exits_zero():
@@ -25,27 +25,37 @@ def test_no_command_prints_help_and_returns_ok():
     assert main([]) == EXIT_OK
 
 
-def test_convert_parses_flag_contract():
-    # The flag names are the contract for later tickets; parsing must succeed
-    # and an actual conversion must raise NotImplementedError (not fake output).
-    with pytest.raises(NotImplementedError):
-        main(
-            [
-                "convert",
-                "input.png",
-                "--mode",
-                "auto",
-                "--quality",
-                "0.9",
-                "--max-iters",
-                "4",
-                "--no-editable",
-                "--out",
-                "out.svg",
-                "--report",
-                "json",
-            ]
-        )
+def test_convert_parses_full_flag_contract():
+    # The full flag contract must parse; a missing input file is a hard error
+    # (exit 1), not a crash.
+    code = main(
+        [
+            "convert",
+            "does-not-exist.png",
+            "--mode",
+            "auto",
+            "--quality",
+            "0.9",
+            "--max-iters",
+            "4",
+            "--no-editable",
+            "--out",
+            "out.svg",
+            "--report",
+            "json",
+        ]
+    )
+    assert code == EXIT_ERROR
+
+
+def test_convert_without_input_is_hard_error():
+    assert main(["convert"]) == EXIT_ERROR
+
+
+def test_invalid_mode_is_usage_error():
+    with pytest.raises(SystemExit) as excinfo:
+        main(["convert", "x.png", "--mode", "bogus"])
+    assert excinfo.value.code == 2  # argparse usage error
 
 
 def test_console_entrypoint_help_exits_zero():
