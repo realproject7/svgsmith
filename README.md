@@ -14,7 +14,9 @@ It does **not** reinvent tracing. It wraps proven engines
 [Potrace](https://potrace.sourceforge.net/) for line art) and adds the layer that is
 missing for agent use: routing, editable output, and a self-verification loop.
 
-> **Status:** early development. See the [EPIC](../../issues) for the build plan.
+> **Status:** MVP complete — engine routing, editable post-processing, the self-verify loop,
+> the CLI/JSON report, and the [`vectorize` skill](skills/vectorize/SKILL.md) are all in.
+> See the [EPIC](../../issues/1) for scope.
 
 ## System dependencies
 
@@ -44,23 +46,57 @@ pinned PyPI wheel and needs no system package.
   warnings) so agents can branch programmatically.
 - **Local & private** — runs fully offline; images never leave the machine.
 
-## Planned usage
+## Gallery
+
+Each pair is the original raster (left) and the svgsmith SVG output (right), rendered at the
+same size. Fixtures are self-generated (see `tests/corpus/`).
+
+| | Original | svgsmith SVG |
+|---|---|---|
+| **Logo** (`--mode binary`) | <img src="docs/gallery/logo_in.png" width="160"> | <img src="docs/gallery/logo_out.png" width="160"> |
+| **Icon** (`--mode binary`) | <img src="docs/gallery/icon_in.png" width="160"> | <img src="docs/gallery/icon_out.png" width="160"> |
+| **Illustration** (`--mode color`) | <img src="docs/gallery/illustration_in.png" width="160"> | <img src="docs/gallery/illustration_out.png" width="160"> |
+| **Pixel art** (`--mode pixel`) | <img src="docs/gallery/pixel_in.png" width="160"> | <img src="docs/gallery/pixel_out.png" width="160"> |
+
+## Usage
 
 ```bash
 svgsmith convert input.png \
   --mode auto \         # auto | binary | color | pixel
   --quality 0.9 \       # target similarity (0–1), drives the verify loop
   --max-iters 4 \
-  --editable \          # editable layered output (default on)
+  --editable \          # editable layered output (default on; --no-editable for raw)
   --out output.svg \
   --report json
 ```
+
+### Flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--mode {auto,binary,color,pixel}` | `auto` | `auto` classifies the image and routes it: `binary`→Potrace (logos/line art), `color`→VTracer (illustrations), `pixel`→VTracer pixel preset. |
+| `--quality FLOAT` | `0.9` | Target fidelity in `[0,1]` (SSIM vs the original). Drives the verify loop. |
+| `--max-iters INT` | `4` | Max verify/refine iterations before returning the best result so far. |
+| `--editable` / `--no-editable` | on | Editable grouped/simplified SVG, or the raw traced output. |
+| `--out PATH` | `<input>.svg` | Output SVG path. |
+| `--report {off,json}` | `off` | Print a JSON report to stdout (the only thing on stdout). |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success — `similarity >= --quality`. |
+| `2` | SVG was produced but stayed below the quality target (still written to `--out`). |
+| `1` | Hard error (e.g. unreadable input, missing `potrace` binary). |
+
+### JSON report
 
 ```json
 {
   "output": "output.svg",
   "mode_used": "color",
   "engine": "vtracer",
+  "preset": "illustration",
   "iterations": 2,
   "similarity": 0.93,
   "passed_threshold": true,
@@ -68,6 +104,29 @@ svgsmith convert input.png \
   "warnings": []
 }
 ```
+
+| Field | Meaning |
+|---|---|
+| `mode_used` / `engine` / `preset` | What the router actually chose. |
+| `iterations` | How many verify/refine passes ran. |
+| `similarity` | Best SSIM achieved vs the original. |
+| `passed_threshold` | `similarity >= --quality`. |
+| `svg` | Output stats: path count, `<g>` groups, distinct colors, byte size. |
+| `warnings` | Human-readable caveats (e.g. photographic gradients that vectorize poorly). |
+
+## How the self-verify loop works
+
+svgsmith doesn't trust a single trace. After producing an SVG it:
+
+1. **re-rasterizes** the SVG back to a bitmap (via `cairosvg`) at the original resolution,
+2. **scores** it against the source with SSIM — that score is `similarity`,
+3. if it's below `--quality`, **re-tunes** the trace/post-process parameters and retries,
+   up to `--max-iters`, and
+4. returns the **best-scoring** result with the score in the report.
+
+That closed loop is what lets an agent run svgsmith unsupervised: it gets a converged
+result and a confidence number, not a guess. For an end-to-end agent wrapper, see the
+[`vectorize` skill](skills/vectorize/SKILL.md).
 
 ## License
 
