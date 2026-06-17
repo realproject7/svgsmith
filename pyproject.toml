@@ -21,6 +21,8 @@ dependencies = [
     "vtracer==0.6.15",
     "Pillow>=10.4,<13",
     "numpy>=1.26,<3",
+    "cairosvg>=2.7,<3",
+    "scikit-image>=0.22,<0.27",
 ]
 
 [project.optional-dependencies]
