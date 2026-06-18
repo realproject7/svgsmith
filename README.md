@@ -37,6 +37,30 @@ brew install potrace cairo
 The color engine ([VTracer](https://github.com/visioncortex/vtracer)) ships as a
 pinned PyPI wheel and needs no system package.
 
+## Installation
+
+Requires **Python 3.11+**. Install the [system dependencies](#system-dependencies)
+above first, then svgsmith:
+
+```bash
+pip install svgsmith
+```
+
+### From source
+
+```bash
+git clone https://github.com/realproject7/svgsmith
+cd svgsmith
+pip install .          # add ".[dev]" for the test/lint extras
+```
+
+Verify the install:
+
+```bash
+svgsmith --version
+svgsmith convert path/to/image.png --out out.svg --report json
+```
+
 ## What makes it different
 
 - **Auto-routing** — classifies the input (logo/icon vs illustration vs pixel art) and
