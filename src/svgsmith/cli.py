@@ -51,6 +51,7 @@ def _convert(args: argparse.Namespace) -> int:
         quality=args.quality,
         max_iters=args.max_iters,
         editable=args.editable,
+        smooth=args.smooth,
         out=args.out,
     )
 
@@ -139,6 +140,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Emit editable, grouped/simplified SVG (default: on). "
             "Use --no-editable to skip postprocessing and emit the raw traced SVG."
+        ),
+    )
+    convert.add_argument(
+        "--smooth",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Curve-refit color output for smoother contours (default: off). "
+            "Preview quality: smoother but larger; compact fitting is pending."
         ),
     )
     convert.add_argument(

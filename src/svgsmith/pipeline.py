@@ -14,7 +14,8 @@ from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
 from svgsmith.preprocess import PreprocessOptions, preprocess
 from svgsmith.report import Report, svg_stats
-from svgsmith.verify import run_loop
+from svgsmith.smooth import smooth_svg
+from svgsmith.verify import rasterize, run_loop, score
 
 # Mode → engine label and the preset used when --mode is given explicitly.
 _ENGINE = {"binary": "potrace", "color": "vtracer", "pixel": "vtracer"}
@@ -30,6 +31,7 @@ class ConvertOptions:
     quality: float = 0.9
     max_iters: int = 4
     editable: bool = True
+    smooth: bool = False  # curve-refit color output (preview; pending compact bezier fit)
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -106,6 +108,16 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         reference=image,  # score against the true original, not the preprocessed image
     )
 
+    # Curve-refit color output so contours are smooth (the verify loop traces
+    # quantized pixel edges, which wobble). Re-score the smoothed result so the
+    # report reflects what is actually written.
+    similarity = result.best_score
+    if opts.smooth and opts.editable and classification.mode == "color":
+        svg = smooth_svg(svg)
+        reference = load_image(image, "RGB")
+        rendered = rasterize(svg, reference.size)
+        similarity = score(reference, rendered)
+
     output = _output_path(input_path, opts.out)
     report = Report(
         output=output,
@@ -113,8 +125,8 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         engine=_ENGINE[classification.mode],
         preset=classification.preset,
         iterations=result.iterations,
-        similarity=result.best_score,
-        passed_threshold=result.best_score >= opts.quality,
+        similarity=similarity,
+        passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
         warnings=list(classification.warnings),
     )
