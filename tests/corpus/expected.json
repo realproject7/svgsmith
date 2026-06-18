@@ -15,13 +15,13 @@
     "mode": "color",
     "min_similarity": 0.96,
     "max_paths": 9,
-    "max_bytes": 1285
+    "max_bytes": 1129
   },
   "illustration/illustration_scene.png": {
     "mode": "color",
     "min_similarity": 0.93,
     "max_paths": 9,
-    "max_bytes": 2001
+    "max_bytes": 1614
   },
   "logo/logo_bars.png": {
     "mode": "binary",
@@ -39,24 +39,24 @@
     "mode": "color",
     "min_similarity": 0.78,
     "max_paths": 60,
-    "max_bytes": 8266
+    "max_bytes": 14726
   },
   "photo/photo_radial.png": {
     "mode": "color",
-    "min_similarity": 0.62,
+    "min_similarity": 0.63,
     "max_paths": 60,
-    "max_bytes": 14110
+    "max_bytes": 18124
   },
   "pixel/pixel_face.png": {
     "mode": "pixel",
-    "min_similarity": 0.84,
+    "min_similarity": 0.92,
     "max_paths": 8,
     "max_bytes": 1089
   },
   "pixel/pixel_heart.png": {
     "mode": "pixel",
-    "min_similarity": 0.69,
+    "min_similarity": 0.92,
     "max_paths": 18,
-    "max_bytes": 3096
+    "max_bytes": 3152
   }
 }

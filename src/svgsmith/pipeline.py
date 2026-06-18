@@ -71,7 +71,11 @@ def _preprocess_opts(mode: str) -> PreprocessOptions:
         # dark fills like outlines/hoodies) but never strip the background, and
         # skip denoise so small features (eyes, faces) survive.
         return PreprocessOptions(
-            denoise=False, quantize=True, palette_size=48, remove_background=False
+            denoise=False,
+            flatten=True,
+            quantize=True,
+            palette_size=48,
+            remove_background=False,
         )
     if mode == "pixel":
         # Pixel art keeps the original cleanup (upscale + quantize); it relies on

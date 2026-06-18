@@ -27,6 +27,9 @@ class PreprocessOptions:
     denoise: bool = True
     median_size: int = 3  # odd window for the median filter
 
+    flatten: bool = False  # edge-preserving color flattening (bilateral)
+    flatten_sigma: float = 0.04  # color sigma; higher = flatter regions
+
     quantize: bool = True
     palette_size: int = 16  # target palette; T3 preset can inform this
 
@@ -59,6 +62,25 @@ def denoise(img: Image.Image, median_size: int) -> Image.Image:
         filtered = filtered.convert("RGBA")
         filtered.putalpha(img.getchannel("A"))
     return filtered
+
+
+def flatten_colors(img: Image.Image, sigma_color: float) -> Image.Image:
+    """Edge-preserving bilateral smoothing to flatten color variation.
+
+    Softens gradients and texture *within* regions while keeping edges sharp, so
+    color-variation-heavy art (painterly, shaded lettering) traces into clean flat
+    regions instead of shattering into many small facets — also cutting path count
+    and file size. The alpha channel, if any, is preserved untouched.
+    """
+    from skimage.restoration import denoise_bilateral
+
+    rgb = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    smoothed = denoise_bilateral(rgb, sigma_color=sigma_color, sigma_spatial=4, channel_axis=2)
+    out = Image.fromarray((smoothed * 255.0).round().astype(np.uint8), "RGB")
+    if img.mode == "RGBA":
+        out = out.convert("RGBA")
+        out.putalpha(img.getchannel("A"))
+    return out
 
 
 def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
@@ -136,6 +158,8 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
         img = upscale_tiny(img, opts.min_dimension)
     if opts.denoise:
         img = denoise(img, opts.median_size)
+    if opts.flatten:
+        img = flatten_colors(img, opts.flatten_sigma)
     if opts.quantize:
         img = quantize_colors(img, opts.palette_size)
     if opts.remove_background:
