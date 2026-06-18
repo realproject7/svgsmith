@@ -19,6 +19,9 @@ from svgsmith.verify import rasterize, run_loop, score
 
 # Mode → engine label and the preset used when --mode is given explicitly.
 _ENGINE = {"binary": "potrace", "color": "vtracer", "pixel": "vtracer"}
+# Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
+# output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
+_SMOOTH_SSIM_TOLERANCE = 0.06
 _MODE_PRESET = {"binary": "logo", "color": "illustration", "pixel": "pixel"}
 MODES = ("auto", *_MODE_PRESET)
 
@@ -31,7 +34,7 @@ class ConvertOptions:
     quality: float = 0.9
     max_iters: int = 4
     editable: bool = True
-    smooth: bool = False  # curve-refit color output (preview; pending compact bezier fit)
+    smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -109,14 +112,17 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     )
 
     # Curve-refit color output so contours are smooth (the verify loop traces
-    # quantized pixel edges, which wobble). Re-score the smoothed result so the
-    # report reflects what is actually written.
+    # quantized pixel edges, which wobble). Re-score the smoothed result and keep
+    # it only if it does not materially hurt fidelity — smoothing legitimately
+    # lowers SSIM a little (SSIM penalizes the small shape change), but a large
+    # drop means it destroyed a feature, so we fall back to the un-smoothed SVG.
     similarity = result.best_score
     if opts.smooth and opts.editable and classification.mode == "color":
-        svg = smooth_svg(svg)
         reference = load_image(image, "RGB")
-        rendered = rasterize(svg, reference.size)
-        similarity = score(reference, rendered)
+        smoothed = smooth_svg(svg)
+        smoothed_score = score(reference, rasterize(smoothed, reference.size))
+        if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
+            svg, similarity = smoothed, smoothed_score
 
     output = _output_path(input_path, opts.out)
     report = Report(

@@ -145,10 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     convert.add_argument(
         "--smooth",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
-            "Curve-refit color output for smoother contours (default: off). "
-            "Preview quality: smoother but larger; compact fitting is pending."
+            "Curve-refit color output into smooth, sparse Bezier contours "
+            "(default: on). Use --no-smooth to keep the raw traced geometry."
         ),
     )
     convert.add_argument(

@@ -37,15 +37,15 @@
   },
   "photo/photo_linear.png": {
     "mode": "color",
-    "min_similarity": 0.78,
+    "min_similarity": 0.75,
     "max_paths": 60,
-    "max_bytes": 14726
+    "max_bytes": 23186
   },
   "photo/photo_radial.png": {
     "mode": "color",
-    "min_similarity": 0.63,
+    "min_similarity": 0.58,
     "max_paths": 60,
-    "max_bytes": 18124
+    "max_bytes": 24679
   },
   "pixel/pixel_face.png": {
     "mode": "pixel",
