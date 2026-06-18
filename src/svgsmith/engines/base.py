@@ -70,7 +70,10 @@ PRESETS: dict[str, Preset] = {
     ),
     "illustration": Preset(
         name="illustration",
-        color_precision=8,
+        # 6 (not the max 8): fewer, flatter color regions up front — perceptual
+        # LAB merge in postprocess then collapses near-duplicate tints. Together
+        # they drive the palette toward a small flat set without crushing rich art.
+        color_precision=6,
         layer_difference=8,
         filter_speckle=4,
         corner_threshold=60,

@@ -30,7 +30,7 @@ class PostprocessOptions:
 
     simplify_level: float = 1.0  # 0 disables; T6 raises this while SSIM holds
     consolidate_palette: bool = True
-    palette_threshold: float = 12.0  # RGB euclidean distance to merge fills
+    palette_threshold: float = 14.0  # perceptual ΔE (CIE76, LAB) to merge fills
     group: bool = True
     precision: int = 2  # output coordinate decimals
     epsilon_ratio: float = 0.0015  # DP epsilon = level * diagonal * ratio
@@ -311,10 +311,36 @@ def _rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(hex_color[i : i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
 
 
+def _rgb_to_lab(hex_color: str) -> tuple[float, float, float]:
+    """sRGB hex -> CIE L*a*b* (D65). Perceptual space so 'close' means look-alike."""
+
+    def _lin(c: float) -> float:
+        c /= 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (_lin(v) for v in _rgb(hex_color))
+    # linear sRGB -> XYZ (D65)
+    x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+    y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+    def _f(t: float) -> float:
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+
+    fx, fy, fz = _f(x), _f(y), _f(z)
+    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+
+
 def _color_distance(a: str, b: str) -> float:
-    ra, ga, ba = _rgb(a)
-    rb, gb, bb = _rgb(b)
-    return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
+    """Perceptual CIE76 ΔE between two hex colors (LAB euclidean).
+
+    LAB rather than raw RGB so visually near-identical tints (e.g. the many close
+    skin tones a tracer emits) collapse while genuinely distinct hues are kept,
+    independent of where they sit in RGB.
+    """
+    la, aa, ba = _rgb_to_lab(a)
+    lb, ab, bb = _rgb_to_lab(b)
+    return ((la - lb) ** 2 + (aa - ab) ** 2 + (ba - bb) ** 2) ** 0.5
 
 
 def _consolidate(colors: list[str], threshold: float) -> dict[str, str]:
