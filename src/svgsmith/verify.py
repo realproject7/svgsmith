@@ -86,8 +86,14 @@ def score(original: Image.Image, rendered: Image.Image) -> float:
 
 
 def _tune_preset(base: Preset, color_level: int) -> Preset:
-    """Ramp color fidelity: more colors, fewer speckles, at higher levels."""
-    color_precision = min(MAX_COLOR_PRECISION, 1 + 3 * color_level)
+    """Trace at full color fidelity from the first pass; recover detail over iters.
+
+    Color fidelity starts at the preset's full ``color_precision`` (never the old
+    near-monochrome ``color_precision=1`` first pass). Successive iterations only
+    *lower* speckle filtering, so small features (faces, eyes) dropped by an early
+    speckle pass are recovered without sacrificing color.
+    """
+    color_precision = min(MAX_COLOR_PRECISION, base.color_precision)
     filter_speckle = max(0, base.filter_speckle - color_level)
     return replace(base, color_precision=color_precision, filter_speckle=filter_speckle)
 

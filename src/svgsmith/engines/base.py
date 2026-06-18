@@ -74,6 +74,11 @@ PRESETS: dict[str, Preset] = {
         layer_difference=8,
         filter_speckle=4,
         corner_threshold=60,
+        # Cutout (non-overlapping regions) rather than stacked: postprocess
+        # regroups paths by fill, which reorders them and would let a light layer
+        # paint over a dark one in a stacked SVG (dark fills vanish). Cutout has no
+        # overlap, so regrouping is order-safe — and the result is cleaner to edit.
+        hierarchical="cutout",
         turdsize=2,
         alphamax=1.0,
         opttolerance=0.4,

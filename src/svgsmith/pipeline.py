@@ -57,6 +57,30 @@ def _output_path(input_path: str, out: str | None) -> str:
     return str(Path(input_path).with_suffix(".svg"))
 
 
+def _preprocess_opts(mode: str) -> PreprocessOptions:
+    """Mode-aware preprocessing.
+
+    Color illustrations must not be pre-quantized, over-denoised, or have their
+    solid background flood-filled away — those steps crush color and delete small
+    features (faces). VTracer owns color reduction downstream. Line art and pixel
+    art keep light, mode-appropriate cleanup. Backgrounds are never removed unless
+    a caller asks (a solid background is content, not noise).
+    """
+    if mode == "color":
+        # Quantize to a generous palette (clean flat regions for VTracer, keeps
+        # dark fills like outlines/hoodies) but never strip the background, and
+        # skip denoise so small features (eyes, faces) survive.
+        return PreprocessOptions(
+            denoise=False, quantize=True, palette_size=48, remove_background=False
+        )
+    if mode == "pixel":
+        # Pixel art keeps the original cleanup (upscale + quantize); it relies on
+        # quantization for crisp flat cells.
+        return PreprocessOptions()
+    # binary / line art: keep the background (a solid bg is content, not noise).
+    return PreprocessOptions(remove_background=False)
+
+
 def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, Report]:
     """Convert a raster image to SVG and return ``(svg, Report)``.
 
@@ -67,7 +91,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     image: ImageInput = load_image(input_path, "RGBA")
 
     classification = _resolve_classification(image, opts.mode)
-    prepared = preprocess(image, PreprocessOptions())
+    prepared = preprocess(image, _preprocess_opts(classification.mode))
 
     svg, result = run_loop(
         prepared,

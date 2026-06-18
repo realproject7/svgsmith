@@ -33,14 +33,21 @@ def test_score_identical_is_one_and_different_is_less():
     assert score(original, other) < score(original, original)
 
 
-def test_under_parameterized_first_pass_improves_and_converges():
+def test_first_pass_full_fidelity_converges():
     cls = classify(ILLUSTRATION)
     _svg, result = run_loop(ILLUSTRATION, cls, quality=0.8, max_iters=4)
-    # First pass is deliberately color-starved, so the loop must engage.
-    assert result.iterations > 1
-    # Similarity improves across iterations and converges above the target.
-    assert result.scores[-1] >= result.scores[0]
+    # The first pass now traces at full color fidelity (no color-starved ramp),
+    # so a reasonable target is met and the best result clears it.
     assert result.best_score >= 0.8
+
+
+def test_loop_engages_and_keeps_best_when_target_unreachable():
+    cls = classify(ILLUSTRATION)
+    # An unreachable target forces the loop to spend its whole budget, varying
+    # parameters each pass; it must keep the strictly best-scoring result.
+    _svg, result = run_loop(ILLUSTRATION, cls, quality=0.999, max_iters=4)
+    assert result.iterations > 1
+    assert result.best_score == max(result.scores)
 
 
 def test_result_reports_scores_params_and_iterations():
