@@ -476,15 +476,25 @@ def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
             svg.set(attr, value)
 
     if group:
-        by_fill: dict[str, list[dict]] = {}
+        # Group *consecutive* same-fill paths into a <g>, preserving the tracer's
+        # original path order. Grouping by color globally would collect a color's
+        # paths from all depths together and reorder them, breaking the stacked
+        # paint order (later = on top) so light fills cover dark ones and dark
+        # regions vanish. Consecutive-run grouping keeps z-order exact while still
+        # producing editable, fill-labelled layers.
+        runs: list[tuple[str, list[dict]]] = []
         for path in paths:
-            by_fill.setdefault(path["fill"] or "none", []).append(path)
-        for index, fill in enumerate(sorted(by_fill), start=1):
+            fill = path["fill"] or "none"
+            if runs and runs[-1][0] == fill:
+                runs[-1][1].append(path)
+            else:
+                runs.append((fill, [path]))
+        for index, (fill, members) in enumerate(runs, start=1):
             slug = fill.lstrip("#") if fill.startswith("#") else fill
             layer = ET.SubElement(
                 svg, f"{{{SVG_NS}}}g", {"id": f"layer-{index:02d}-{slug}", "fill": fill}
             )
-            for path in by_fill[fill]:
+            for path in members:
                 _append_path(layer, path, include_fill=False)
     else:
         for path in paths:
