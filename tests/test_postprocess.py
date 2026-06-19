@@ -81,25 +81,26 @@ def test_bounding_box_preserved_within_tolerance():
     assert all(abs(a - b) <= tolerance for a, b in zip(before, after, strict=True))
 
 
-def test_viewbox_or_dimensions_preserved():
-    out = postprocess(TRACE_SVG)
-    src_root = ET.fromstring(TRACE_SVG)
-    out_root = ET.fromstring(out)
-    assert out_root.get("width") == src_root.get("width")
-    assert out_root.get("height") == src_root.get("height")
+def test_output_is_responsive_with_viewbox():
+    # Output must be a scalable, responsive root: a viewBox is present and there are
+    # no fixed pixel width/height (which would make a browser render at raw size and
+    # overflow/scroll). A viewBox is derived from the source dimensions when absent.
+    out_root = ET.fromstring(postprocess(TRACE_SVG))
+    assert out_root.get("viewBox") is not None
+    assert out_root.get("width") is None
+    assert out_root.get("height") is None
+    assert "100%" in (out_root.get("style") or "")
 
 
-def test_explicit_dimensions_kept_alongside_viewbox():
-    # width/height must be preserved verbatim, not overwritten by viewBox extents.
+def test_existing_viewbox_is_kept():
     svg = (
         f'<svg xmlns="{SVG_NS}" width="200" height="100" viewBox="0 0 20 10">'
         '<path d="M0 0 L20 0 L20 10 L0 10 Z" fill="#123456"/>'
         "</svg>"
     )
     out_root = ET.fromstring(postprocess(svg))
-    assert out_root.get("width") == "200"
-    assert out_root.get("height") == "100"
     assert out_root.get("viewBox") == "0 0 20 10"
+    assert out_root.get("width") is None and out_root.get("height") is None
 
 
 def test_simplify_level_zero_keeps_points():

@@ -505,11 +505,20 @@ def _geometry_size(root: ET.Element) -> tuple[float, float]:
 def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
     ET.register_namespace("", SVG_NS)
     svg = ET.Element(f"{{{SVG_NS}}}svg", {"version": source.get("version", "1.1")})
-    # Preserve the root sizing attributes exactly as authored.
-    for attr in ("viewBox", "width", "height"):
-        value = source.get(attr)
-        if value is not None:
-            svg.set(attr, value)
+    # Emit a responsive, scalable root. The tracer outputs a fixed pixel width/height
+    # and NO viewBox, so a browser renders the SVG at its raw pixel size and it
+    # overflows/scrolls. A viewBox makes the geometry scalable; dropping the fixed
+    # width/height and scaling to 100% lets it fit any container/viewport with the
+    # aspect ratio preserved (default xMidYMid meet).
+    view_box = source.get("viewBox")
+    if view_box is None:
+        width, height = _geometry_size(source)
+        if width and height:
+            view_box = f"0 0 {width:g} {height:g}"
+    if view_box:
+        svg.set("viewBox", view_box)
+    svg.set("style", "width:100%;height:100%")
+    svg.set("preserveAspectRatio", "xMidYMid meet")
 
     if group:
         # Group *consecutive* same-fill paths into a <g>, preserving the tracer's
