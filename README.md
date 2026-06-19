@@ -114,8 +114,16 @@ svgsmith convert input.png \
 
 > **Composable for agents.** svgsmith is meant to be driven by an AI agent that maps a
 > user's intent to flags. *"Detailed character on a clean flat background"* →
-> `--solid-background`; *"crisp logo"* → `--mode binary`; *"keep the raw look"* →
-> `--no-smooth`. The [`vectorize` skill](skills/vectorize/SKILL.md) encodes this mapping.
+> `--detail high --solid-background`; *"poster-style, minimal"* → `--detail poster`;
+> *"crisp logo"* → `--mode binary`; *"keep the raw look"* → `--no-smooth`. The
+> [`vectorize` skill](skills/vectorize/SKILL.md) encodes this mapping.
+
+### Output
+
+The SVG is **responsive and scalable**: it carries a `viewBox` and no fixed pixel
+dimensions (`style="width:100%;height:100%"`, `preserveAspectRatio="xMidYMid meet"`),
+so it fits any container or browser window with its aspect ratio preserved — no
+overflow or scrollbars.
 
 ### Exit codes
 
