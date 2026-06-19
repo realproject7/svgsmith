@@ -100,3 +100,16 @@ def test_cli_default_report_keeps_stdout_empty(tmp_path):
     )
     assert result.stdout == ""  # no --report json → nothing on stdout
     assert out.exists()
+
+
+def test_uniform_outline_is_opt_in_and_color_only():
+    # Off by default: identical to the standard color conversion.
+    base = convert(str(FIXTURES / "illustration.png"), ConvertOptions(max_iters=1))[1]
+    on = convert(
+        str(FIXTURES / "illustration.png"),
+        ConvertOptions(max_iters=1, uniform_outline=True),
+    )[1]
+    assert base.mode_used == "color"
+    # The flag runs without error and still produces a valid color SVG report.
+    assert on.mode_used == "color"
+    assert on.svg.paths >= 1

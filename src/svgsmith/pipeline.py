@@ -7,7 +7,7 @@ the canonical :class:`~svgsmith.report.Report`. The CLI is a thin wrapper around
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from svgsmith.classify import Classification, classify
@@ -35,6 +35,7 @@ class ConvertOptions:
     max_iters: int = 4
     editable: bool = True
     smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
+    uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -100,7 +101,10 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     image: ImageInput = load_image(input_path, "RGBA")
 
     classification = _resolve_classification(image, opts.mode)
-    prepared = preprocess(image, _preprocess_opts(classification.mode))
+    pre_opts = _preprocess_opts(classification.mode)
+    if opts.uniform_outline and classification.mode == "color":
+        pre_opts = replace(pre_opts, uniform_outline=True)
+    prepared = preprocess(image, pre_opts)
 
     svg, result = run_loop(
         prepared,

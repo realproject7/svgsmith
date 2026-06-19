@@ -52,6 +52,7 @@ def _convert(args: argparse.Namespace) -> int:
         max_iters=args.max_iters,
         editable=args.editable,
         smooth=args.smooth,
+        uniform_outline=args.uniform_outline,
         out=args.out,
     )
 
@@ -149,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Curve-refit color output into smooth, sparse Bezier contours "
             "(default: on). Use --no-smooth to keep the raw traced geometry."
+        ),
+    )
+    convert.add_argument(
+        "--uniform-outline",
+        action="store_true",
+        default=False,
+        help=(
+            "Force an even-width outline band (color mode). Opt-in: only for "
+            "illustrations that already have a dark outline; would add a wrong "
+            "border on line art."
         ),
     )
     convert.add_argument(
