@@ -1,62 +1,62 @@
 {
-  "logo/logo_bars.png": {
-    "mode": "binary",
-    "min_similarity": 0.87,
-    "max_paths": 6,
-    "max_bytes": 1073
-  },
-  "logo/logo_ring.png": {
-    "mode": "binary",
-    "min_similarity": 0.89,
-    "max_paths": 6,
-    "max_bytes": 1446
-  },
   "icon/icon_arrow.png": {
     "mode": "binary",
     "min_similarity": 0.91,
     "max_paths": 6,
-    "max_bytes": 820
+    "max_bytes": 831
   },
   "icon/icon_cross.png": {
     "mode": "binary",
     "min_similarity": 0.83,
     "max_paths": 6,
-    "max_bytes": 1091
+    "max_bytes": 1084
   },
   "illustration/illustration_blocks.png": {
     "mode": "color",
-    "min_similarity": 0.92,
-    "max_paths": 12,
-    "max_bytes": 1961
+    "min_similarity": 0.89,
+    "max_paths": 9,
+    "max_bytes": 3043
   },
   "illustration/illustration_scene.png": {
     "mode": "color",
-    "min_similarity": 0.75,
-    "max_paths": 12,
-    "max_bytes": 1840
+    "min_similarity": 0.88,
+    "max_paths": 9,
+    "max_bytes": 3469
+  },
+  "logo/logo_bars.png": {
+    "mode": "binary",
+    "min_similarity": 0.88,
+    "max_paths": 6,
+    "max_bytes": 1067
+  },
+  "logo/logo_ring.png": {
+    "mode": "binary",
+    "min_similarity": 0.9,
+    "max_paths": 6,
+    "max_bytes": 1444
   },
   "photo/photo_linear.png": {
     "mode": "color",
-    "min_similarity": 0.78,
-    "max_paths": 6,
-    "max_bytes": 530
+    "min_similarity": 0.72,
+    "max_paths": 60,
+    "max_bytes": 27324
   },
   "photo/photo_radial.png": {
     "mode": "color",
-    "min_similarity": 0.54,
-    "max_paths": 6,
-    "max_bytes": 790
+    "min_similarity": 0.56,
+    "max_paths": 60,
+    "max_bytes": 26670
   },
   "pixel/pixel_face.png": {
     "mode": "pixel",
-    "min_similarity": 0.83,
-    "max_paths": 12,
-    "max_bytes": 1097
+    "min_similarity": 0.91,
+    "max_paths": 8,
+    "max_bytes": 1089
   },
   "pixel/pixel_heart.png": {
     "mode": "pixel",
-    "min_similarity": 0.68,
-    "max_paths": 32,
-    "max_bytes": 3259
+    "min_similarity": 0.91,
+    "max_paths": 18,
+    "max_bytes": 3152
   }
 }

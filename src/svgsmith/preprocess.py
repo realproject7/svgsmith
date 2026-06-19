@@ -27,8 +27,14 @@ class PreprocessOptions:
     denoise: bool = True
     median_size: int = 3  # odd window for the median filter
 
+    flatten: bool = False  # edge-preserving color flattening (bilateral)
+    flatten_sigma: float = 0.04  # color sigma; higher = flatter regions
+
     quantize: bool = True
     palette_size: int = 16  # target palette; T3 preset can inform this
+
+    uniform_outline: bool = False  # force a constant-width outline band (opt-in)
+    outline_width: int = 8  # band half-width in px, used when uniform_outline is on
 
     remove_background: bool = True
     bg_tolerance: int = 24  # per-channel tolerance for the background color
@@ -61,6 +67,25 @@ def denoise(img: Image.Image, median_size: int) -> Image.Image:
     return filtered
 
 
+def flatten_colors(img: Image.Image, sigma_color: float) -> Image.Image:
+    """Edge-preserving bilateral smoothing to flatten color variation.
+
+    Softens gradients and texture *within* regions while keeping edges sharp, so
+    color-variation-heavy art (painterly, shaded lettering) traces into clean flat
+    regions instead of shattering into many small facets — also cutting path count
+    and file size. The alpha channel, if any, is preserved untouched.
+    """
+    from skimage.restoration import denoise_bilateral
+
+    rgb = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    smoothed = denoise_bilateral(rgb, sigma_color=sigma_color, sigma_spatial=4, channel_axis=2)
+    out = Image.fromarray((smoothed * 255.0).round().astype(np.uint8), "RGB")
+    if img.mode == "RGBA":
+        out = out.convert("RGBA")
+        out.putalpha(img.getchannel("A"))
+    return out
+
+
 def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
     """Median-cut quantization to at most ``palette_size`` colors.
 
@@ -76,6 +101,39 @@ def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
         quantized = quantized.convert("RGBA")
         quantized.putalpha(img.getchannel("A"))
     return quantized
+
+
+def uniform_outline(img: Image.Image, width: int, bg_tolerance: int = 18) -> Image.Image:
+    """Paint a constant-width band of the darkest color around the silhouette.
+
+    Premium cartoon SVGs read with an even outline because the dark "line" is a
+    constant geometric inset of one silhouette. A trace builds the outline as the
+    byproduct of two independently-traced contours, so its width wobbles. Forcing a
+    uniform dark band on the silhouette boundary *before* tracing makes the outer
+    outline even by construction.
+
+    Opt-in only: it assumes the art HAS a dark outline around a solid-background
+    figure. On line art or outline-free illustrations it would add a wrong border.
+    """
+    from scipy.ndimage import binary_erosion, binary_fill_holes
+
+    rgba = np.array(img.convert("RGBA"))
+    rgb = rgba[:, :, :3].astype(int)
+    corners = [
+        tuple(rgba[0, 0, :3]),
+        tuple(rgba[0, -1, :3]),
+        tuple(rgba[-1, 0, :3]),
+        tuple(rgba[-1, -1, :3]),
+    ]
+    background = np.array(max(set(corners), key=corners.count), dtype=int)
+    silhouette = binary_fill_holes(np.abs(rgb - background).max(axis=2) > bg_tolerance)
+    eroded = binary_erosion(silhouette, iterations=max(1, width))
+    band = silhouette & ~eroded
+    flat = rgba[:, :, :3].reshape(-1, 3)
+    outline_color = flat[int(np.argmin(flat.sum(axis=1)))]
+    rgba[band, :3] = outline_color
+    rgba[band, 3] = 255
+    return Image.fromarray(rgba, "RGBA")
 
 
 def remove_background(img: Image.Image, tolerance: int) -> Image.Image:
@@ -136,8 +194,12 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
         img = upscale_tiny(img, opts.min_dimension)
     if opts.denoise:
         img = denoise(img, opts.median_size)
+    if opts.flatten:
+        img = flatten_colors(img, opts.flatten_sigma)
     if opts.quantize:
         img = quantize_colors(img, opts.palette_size)
+    if opts.uniform_outline:
+        img = uniform_outline(img, opts.outline_width)
     if opts.remove_background:
         img = remove_background(img, opts.bg_tolerance)
 

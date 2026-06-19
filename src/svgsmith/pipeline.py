@@ -7,17 +7,21 @@ the canonical :class:`~svgsmith.report.Report`. The CLI is a thin wrapper around
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
 from svgsmith.preprocess import PreprocessOptions, preprocess
 from svgsmith.report import Report, svg_stats
-from svgsmith.verify import run_loop
+from svgsmith.smooth import smooth_svg
+from svgsmith.verify import rasterize, run_loop, score
 
 # Mode → engine label and the preset used when --mode is given explicitly.
 _ENGINE = {"binary": "potrace", "color": "vtracer", "pixel": "vtracer"}
+# Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
+# output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
+_SMOOTH_SSIM_TOLERANCE = 0.06
 _MODE_PRESET = {"binary": "logo", "color": "illustration", "pixel": "pixel"}
 MODES = ("auto", *_MODE_PRESET)
 
@@ -30,6 +34,8 @@ class ConvertOptions:
     quality: float = 0.9
     max_iters: int = 4
     editable: bool = True
+    smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
+    uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -57,6 +63,34 @@ def _output_path(input_path: str, out: str | None) -> str:
     return str(Path(input_path).with_suffix(".svg"))
 
 
+def _preprocess_opts(mode: str) -> PreprocessOptions:
+    """Mode-aware preprocessing.
+
+    Color illustrations must not be pre-quantized, over-denoised, or have their
+    solid background flood-filled away — those steps crush color and delete small
+    features (faces). VTracer owns color reduction downstream. Line art and pixel
+    art keep light, mode-appropriate cleanup. Backgrounds are never removed unless
+    a caller asks (a solid background is content, not noise).
+    """
+    if mode == "color":
+        # Quantize to a generous palette (clean flat regions for VTracer, keeps
+        # dark fills like outlines/hoodies) but never strip the background, and
+        # skip denoise so small features (eyes, faces) survive.
+        return PreprocessOptions(
+            denoise=False,
+            flatten=True,
+            quantize=True,
+            palette_size=48,
+            remove_background=False,
+        )
+    if mode == "pixel":
+        # Pixel art keeps the original cleanup (upscale + quantize); it relies on
+        # quantization for crisp flat cells.
+        return PreprocessOptions()
+    # binary / line art: keep the background (a solid bg is content, not noise).
+    return PreprocessOptions(remove_background=False)
+
+
 def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, Report]:
     """Convert a raster image to SVG and return ``(svg, Report)``.
 
@@ -67,7 +101,10 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     image: ImageInput = load_image(input_path, "RGBA")
 
     classification = _resolve_classification(image, opts.mode)
-    prepared = preprocess(image, PreprocessOptions())
+    pre_opts = _preprocess_opts(classification.mode)
+    if opts.uniform_outline and classification.mode == "color":
+        pre_opts = replace(pre_opts, uniform_outline=True)
+    prepared = preprocess(image, pre_opts)
 
     svg, result = run_loop(
         prepared,
@@ -78,6 +115,19 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         reference=image,  # score against the true original, not the preprocessed image
     )
 
+    # Curve-refit color output so contours are smooth (the verify loop traces
+    # quantized pixel edges, which wobble). Re-score the smoothed result and keep
+    # it only if it does not materially hurt fidelity — smoothing legitimately
+    # lowers SSIM a little (SSIM penalizes the small shape change), but a large
+    # drop means it destroyed a feature, so we fall back to the un-smoothed SVG.
+    similarity = result.best_score
+    if opts.smooth and opts.editable and classification.mode == "color":
+        reference = load_image(image, "RGB")
+        smoothed = smooth_svg(svg)
+        smoothed_score = score(reference, rasterize(smoothed, reference.size))
+        if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
+            svg, similarity = smoothed, smoothed_score
+
     output = _output_path(input_path, opts.out)
     report = Report(
         output=output,
@@ -85,8 +135,8 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         engine=_ENGINE[classification.mode],
         preset=classification.preset,
         iterations=result.iterations,
-        similarity=result.best_score,
-        passed_threshold=result.best_score >= opts.quality,
+        similarity=similarity,
+        passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
         warnings=list(classification.warnings),
     )

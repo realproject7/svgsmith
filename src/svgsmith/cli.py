@@ -51,6 +51,8 @@ def _convert(args: argparse.Namespace) -> int:
         quality=args.quality,
         max_iters=args.max_iters,
         editable=args.editable,
+        smooth=args.smooth,
+        uniform_outline=args.uniform_outline,
         out=args.out,
     )
 
@@ -139,6 +141,25 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Emit editable, grouped/simplified SVG (default: on). "
             "Use --no-editable to skip postprocessing and emit the raw traced SVG."
+        ),
+    )
+    convert.add_argument(
+        "--smooth",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Curve-refit color output into smooth, sparse Bezier contours "
+            "(default: on). Use --no-smooth to keep the raw traced geometry."
+        ),
+    )
+    convert.add_argument(
+        "--uniform-outline",
+        action="store_true",
+        default=False,
+        help=(
+            "Force an even-width outline band (color mode). Opt-in: only for "
+            "illustrations that already have a dark outline; would add a wrong "
+            "border on line art."
         ),
     )
     convert.add_argument(

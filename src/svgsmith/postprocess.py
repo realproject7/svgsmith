@@ -30,7 +30,7 @@ class PostprocessOptions:
 
     simplify_level: float = 1.0  # 0 disables; T6 raises this while SSIM holds
     consolidate_palette: bool = True
-    palette_threshold: float = 12.0  # RGB euclidean distance to merge fills
+    palette_threshold: float = 14.0  # perceptual ΔE (CIE76, LAB) to merge fills
     group: bool = True
     precision: int = 2  # output coordinate decimals
     epsilon_ratio: float = 0.0015  # DP epsilon = level * diagonal * ratio
@@ -216,12 +216,22 @@ def _subpath_points(sub: _Subpath, samples: int) -> list[Point]:
     return points
 
 
+# A curve counts as "straight" only if its control points hug the chord both in
+# absolute terms (epsilon, for long flat edges) AND relative to its own chord
+# length. The relative test protects small features: an eye's cubic has a chord of
+# only ~10px, so its real 2px bulge is 20% of the chord — clearly curved — yet sits
+# under the absolute epsilon (~2px) and was being flattened into a polygon.
+_LINEAR_CHORD_FRACTION = 0.04
+
+
 def _is_linear_segment(p0: Point, seg: Segment, epsilon: float) -> bool:
     """True for a line, or a curve whose control points hug its chord."""
     if seg[0] == "L":
         return True
     end = seg[-1]
-    return all(_perpendicular_distance(c, p0, end) <= epsilon for c in seg[1:-1])
+    chord = ((end[0] - p0[0]) ** 2 + (end[1] - p0[1]) ** 2) ** 0.5
+    limit = min(epsilon, chord * _LINEAR_CHORD_FRACTION)
+    return all(_perpendicular_distance(c, p0, end) <= limit for c in seg[1:-1])
 
 
 def simplify_subpath(sub: _Subpath, epsilon: float) -> _Subpath:
@@ -311,10 +321,36 @@ def _rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(hex_color[i : i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
 
 
+def _rgb_to_lab(hex_color: str) -> tuple[float, float, float]:
+    """sRGB hex -> CIE L*a*b* (D65). Perceptual space so 'close' means look-alike."""
+
+    def _lin(c: float) -> float:
+        c /= 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (_lin(v) for v in _rgb(hex_color))
+    # linear sRGB -> XYZ (D65)
+    x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+    y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+    def _f(t: float) -> float:
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+
+    fx, fy, fz = _f(x), _f(y), _f(z)
+    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+
+
 def _color_distance(a: str, b: str) -> float:
-    ra, ga, ba = _rgb(a)
-    rb, gb, bb = _rgb(b)
-    return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
+    """Perceptual CIE76 ΔE between two hex colors (LAB euclidean).
+
+    LAB rather than raw RGB so visually near-identical tints (e.g. the many close
+    skin tones a tracer emits) collapse while genuinely distinct hues are kept,
+    independent of where they sit in RGB.
+    """
+    la, aa, ba = _rgb_to_lab(a)
+    lb, ab, bb = _rgb_to_lab(b)
+    return ((la - lb) ** 2 + (aa - ab) ** 2 + (ba - bb) ** 2) ** 0.5
 
 
 def _consolidate(colors: list[str], threshold: float) -> dict[str, str]:
@@ -476,15 +512,25 @@ def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
             svg.set(attr, value)
 
     if group:
-        by_fill: dict[str, list[dict]] = {}
+        # Group *consecutive* same-fill paths into a <g>, preserving the tracer's
+        # original path order. Grouping by color globally would collect a color's
+        # paths from all depths together and reorder them, breaking the stacked
+        # paint order (later = on top) so light fills cover dark ones and dark
+        # regions vanish. Consecutive-run grouping keeps z-order exact while still
+        # producing editable, fill-labelled layers.
+        runs: list[tuple[str, list[dict]]] = []
         for path in paths:
-            by_fill.setdefault(path["fill"] or "none", []).append(path)
-        for index, fill in enumerate(sorted(by_fill), start=1):
+            fill = path["fill"] or "none"
+            if runs and runs[-1][0] == fill:
+                runs[-1][1].append(path)
+            else:
+                runs.append((fill, [path]))
+        for index, (fill, members) in enumerate(runs, start=1):
             slug = fill.lstrip("#") if fill.startswith("#") else fill
             layer = ET.SubElement(
                 svg, f"{{{SVG_NS}}}g", {"id": f"layer-{index:02d}-{slug}", "fill": fill}
             )
-            for path in by_fill[fill]:
+            for path in members:
                 _append_path(layer, path, include_fill=False)
     else:
         for path in paths:
