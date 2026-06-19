@@ -90,6 +90,35 @@ def _convert(args: argparse.Namespace) -> int:
     return EXIT_OK if report.passed_threshold else EXIT_BELOW_THRESHOLD
 
 
+def _rasterize(args: argparse.Namespace) -> int:
+    """Handle ``svgsmith rasterize`` — render an SVG to PNG."""
+    if not args.input:
+        _log("error: an input SVG path is required")
+        return EXIT_ERROR
+    from pathlib import Path
+
+    from svgsmith.render import rasterize as render_png
+
+    out = args.out or str(Path(args.input).with_suffix(".png"))
+    try:
+        render_png(
+            args.input,
+            out,
+            width=args.width,
+            height=args.height,
+            scale=args.scale,
+            background=args.background,
+        )
+    except FileNotFoundError:
+        _log(f"error: input not found: {args.input}")
+        return EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - surface any failure as a hard error
+        _log(f"error: rasterize failed: {exc}")
+        return EXIT_ERROR
+    _log(f"wrote {out}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser and its subcommands."""
     parser = argparse.ArgumentParser(
@@ -195,6 +224,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit a JSON report alongside the SVG (default: off).",
     )
     convert.set_defaults(func=_convert)
+
+    rasterize = subparsers.add_parser(
+        "rasterize",
+        help="Render an SVG back to a PNG bitmap.",
+        description="Rasterize an SVG to PNG (preview, thumbnail, round-trip).",
+    )
+    rasterize.add_argument("input", nargs="?", help="Path to the input SVG file.")
+    rasterize.add_argument(
+        "--out", default=None, help="Output PNG path (default: input with a .png extension)."
+    )
+    rasterize.add_argument("--width", type=int, default=None, help="Output width in px.")
+    rasterize.add_argument("--height", type=int, default=None, help="Output height in px.")
+    rasterize.add_argument(
+        "--scale", type=float, default=None, help="Scale factor over the intrinsic size."
+    )
+    rasterize.add_argument(
+        "--background",
+        default=None,
+        help="Background color (e.g. white, #ffffff). Default: transparent.",
+    )
+    rasterize.set_defaults(func=_rasterize)
 
     return parser
 
