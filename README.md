@@ -106,6 +106,7 @@ svgsmith convert input.png \
 | `--max-iters INT` | `4` | Max verify/refine iterations before returning the best result so far. |
 | `--editable` / `--no-editable` | on | Editable grouped/simplified SVG, or the raw traced output. |
 | `--smooth` / `--no-smooth` | on | Curve-refit color contours into smooth, sparse Béziers (Schneider least-squares). |
+| `--detail {high,normal,clean,poster}` | `normal` | Color detail dial. `high` = maximum detail; `clean` = edge-preserving cleanup (less noise/grain); `poster` = bold flat graphic with few colors. |
 | `--solid-background` | off | Isolate the subject and repaint the background as one clean solid color — removes texture/grain/specks while keeping subject detail. |
 | `--uniform-outline` | off | Force an even-width outline band (outlined illustrations only; would add a wrong border on line art). |
 | `--out PATH` | `<input>.svg` | Output SVG path. |

@@ -19,6 +19,16 @@ from svgsmith.verify import rasterize, run_loop, score
 
 # Mode → engine label and the preset used when --mode is given explicitly.
 _ENGINE = {"binary": "potrace", "color": "vtracer", "pixel": "vtracer"}
+# Detail levels for color mode — the dial between maximum fidelity and a flat
+# poster look. Each maps to (edge-preserving flatten sigma, pre-trace palette size,
+# perceptual LAB ΔE merge threshold). "normal" is the default and reproduces the
+# prior behavior exactly. Higher levels flatten more and keep fewer colors.
+DETAIL_LEVELS = {
+    "high": (0.02, 64, 10.0),  # maximum detail: least flattening, richest palette
+    "normal": (0.04, 48, 14.0),  # balanced (default)
+    "clean": (0.10, 48, 18.0),  # tidied: edge-preserving cleanup, noise reduced
+    "poster": (0.13, 28, 30.0),  # bold flat graphic: few colors, strong flattening
+}
 # Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
 # output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
 _SMOOTH_SSIM_TOLERANCE = 0.06
@@ -37,6 +47,7 @@ class ConvertOptions:
     smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
     uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
     solid_background: bool = False  # opt-in: isolate subject, repaint background one solid color
+    detail: str = "normal"  # color detail dial: high | normal | clean | poster
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -44,6 +55,10 @@ class ConvertOptions:
             raise ValueError(f"quality must be in [0, 1], got {self.quality}")
         if self.max_iters < 1:
             raise ValueError(f"max_iters must be >= 1, got {self.max_iters}")
+        if self.detail not in DETAIL_LEVELS:
+            raise ValueError(
+                f"detail must be one of {', '.join(DETAIL_LEVELS)}, got {self.detail!r}"
+            )
 
 
 def _resolve_classification(image, mode: str) -> Classification:
@@ -102,7 +117,10 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     image: ImageInput = load_image(input_path, "RGBA")
 
     classification = _resolve_classification(image, opts.mode)
+    flatten_sigma, palette_size, palette_threshold = DETAIL_LEVELS[opts.detail]
     pre_opts = _preprocess_opts(classification.mode)
+    if classification.mode == "color":
+        pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
     if opts.uniform_outline and classification.mode == "color":
         pre_opts = replace(pre_opts, uniform_outline=True)
     if opts.solid_background:
@@ -116,6 +134,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         max_iters=opts.max_iters,
         editable=opts.editable,
         reference=image,  # score against the true original, not the preprocessed image
+        palette_threshold=palette_threshold if classification.mode == "color" else None,
     )
 
     # Curve-refit color output so contours are smooth (the verify loop traces

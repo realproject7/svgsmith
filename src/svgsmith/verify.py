@@ -104,12 +104,16 @@ def _trace_and_post(
     preset: Preset,
     simplify_level: float,
     editable: bool = True,
+    palette_threshold: float | None = None,
 ) -> str:
     engine = BinaryTracer() if mode == "binary" else ColorTracer()
     raw = engine.trace(image, preset)
     if not editable:
         return raw  # --no-editable: emit the raw traced SVG, skip postprocess
-    return postprocess(raw, PostprocessOptions(simplify_level=simplify_level))
+    opts = PostprocessOptions(simplify_level=simplify_level)
+    if palette_threshold is not None:
+        opts = replace(opts, palette_threshold=palette_threshold)
+    return postprocess(raw, opts)
 
 
 def run_loop(
@@ -120,6 +124,7 @@ def run_loop(
     renderer: str | None = None,
     editable: bool = True,
     reference: ImageInput | None = None,
+    palette_threshold: float | None = None,
 ) -> tuple[str, VerifyResult]:
     """Trace+postprocess, score, and re-tune up to ``max_iters``; return the best.
 
@@ -165,7 +170,9 @@ def run_loop(
             simplify_level += 1.0
 
         preset = _tune_preset(base, color_level)
-        svg = _trace_and_post(trace_image, mode, preset, simplify_level, editable)
+        svg = _trace_and_post(
+            trace_image, mode, preset, simplify_level, editable, palette_threshold
+        )
         current = score(original, rasterize(svg, original.size, renderer))
         scores.append(current)
         params = {
