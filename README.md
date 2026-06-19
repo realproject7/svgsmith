@@ -118,6 +118,16 @@ svgsmith convert input.png \
 > *"crisp logo"* → `--mode binary`; *"keep the raw look"* → `--no-smooth`. The
 > [`vectorize` skill](skills/vectorize/SKILL.md) encodes this mapping.
 
+### Rasterize (SVG → PNG)
+
+The inverse command renders an SVG back to a PNG (preview, thumbnail, round-trip):
+
+```bash
+svgsmith rasterize input.svg --out out.png        # intrinsic (viewBox) size
+svgsmith rasterize input.svg --width 512           # fixed width
+svgsmith rasterize input.svg --scale 2 --background white
+```
+
 ### Output
 
 The SVG is **responsive and scalable**: it carries a `viewBox` and no fixed pixel
