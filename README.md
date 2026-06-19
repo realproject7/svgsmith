@@ -105,8 +105,16 @@ svgsmith convert input.png \
 | `--quality FLOAT` | `0.9` | Target fidelity in `[0,1]` (SSIM vs the original). Drives the verify loop. |
 | `--max-iters INT` | `4` | Max verify/refine iterations before returning the best result so far. |
 | `--editable` / `--no-editable` | on | Editable grouped/simplified SVG, or the raw traced output. |
+| `--smooth` / `--no-smooth` | on | Curve-refit color contours into smooth, sparse Béziers (Schneider least-squares). |
+| `--solid-background` | off | Isolate the subject and repaint the background as one clean solid color — removes texture/grain/specks while keeping subject detail. |
+| `--uniform-outline` | off | Force an even-width outline band (outlined illustrations only; would add a wrong border on line art). |
 | `--out PATH` | `<input>.svg` | Output SVG path. |
 | `--report {off,json}` | `off` | Print a JSON report to stdout (the only thing on stdout). |
+
+> **Composable for agents.** svgsmith is meant to be driven by an AI agent that maps a
+> user's intent to flags. *"Detailed character on a clean flat background"* →
+> `--solid-background`; *"crisp logo"* → `--mode binary`; *"keep the raw look"* →
+> `--no-smooth`. The [`vectorize` skill](skills/vectorize/SKILL.md) encodes this mapping.
 
 ### Exit codes
 

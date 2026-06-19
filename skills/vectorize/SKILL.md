@@ -26,6 +26,15 @@ Choose `--mode` and `--quality` from what the user asked for. When unsure, use `
 | "pixel art", sprite, low-res blocky image | `--mode pixel` |
 | anything unspecified / "vectorize this" | `--mode auto` |
 
+Then add **refinement flags** based on what the user wants out of it (these compose):
+
+| User wants | Add flag |
+|---|---|
+| "clean / flat / solid background", "remove the background texture", "just the subject on a plain color", "isolate the cat/logo/person" | `--solid-background` |
+| "keep maximum detail on the subject" | (default already preserves detail; `--solid-background` also helps by not spending the palette on background noise) |
+| "even / consistent outline", "uniform line weight" (only for art that already has a dark outline) | `--uniform-outline` |
+| "keep the raw / rough / hand-drawn look", "don't smooth it" | `--no-smooth` |
+
 Always pass `--report json` and a sensible `--out` (default: input path with `.svg`).
 
 ## Step 2 — Run the CLI

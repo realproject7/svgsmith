@@ -36,6 +36,7 @@ class ConvertOptions:
     editable: bool = True
     smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
     uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
+    solid_background: bool = False  # opt-in: isolate subject, repaint background one solid color
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -104,6 +105,8 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     pre_opts = _preprocess_opts(classification.mode)
     if opts.uniform_outline and classification.mode == "color":
         pre_opts = replace(pre_opts, uniform_outline=True)
+    if opts.solid_background:
+        pre_opts = replace(pre_opts, solid_background=True)
     prepared = preprocess(image, pre_opts)
 
     svg, result = run_loop(
