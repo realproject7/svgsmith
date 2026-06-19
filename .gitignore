@@ -16,3 +16,4 @@ htmlcov/
 # local scratch / test outputs
 /scratch/
 *.out.svg
+.po/

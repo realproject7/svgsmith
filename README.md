@@ -2,6 +2,15 @@
 
 > Agent-native, self-verifying raster→SVG vectorizer.
 
+[![PyPI](https://img.shields.io/pypi/v/svgsmith.svg)](https://pypi.org/project/svgsmith/)
+[![Python](https://img.shields.io/pypi/pyversions/svgsmith.svg)](https://pypi.org/project/svgsmith/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml)
+
+```bash
+pip install svgsmith
+```
+
 `svgsmith` turns PNG/JPG images into **editable** SVG. It is built to be driven by an
 AI agent without a human in the loop: it picks the right tracing engine for the input,
 post-processes the result into clean editable layers, and **verifies its own output** by
@@ -14,9 +23,9 @@ It does **not** reinvent tracing. It wraps proven engines
 [Potrace](https://potrace.sourceforge.net/) for line art) and adds the layer that is
 missing for agent use: routing, editable output, and a self-verification loop.
 
-> **Status:** MVP complete — engine routing, editable post-processing, the self-verify loop,
-> the CLI/JSON report, and the [`vectorize` skill](skills/vectorize/SKILL.md) are all in.
-> See the [EPIC](../../issues/1) for scope.
+> **Status:** released — `svgsmith 0.1.0` is on [PyPI](https://pypi.org/project/svgsmith/).
+> Engine routing, editable post-processing, the self-verify loop, the CLI + JSON report,
+> SVG→PNG rasterization, and the [`vectorize` skill](skills/vectorize/SKILL.md) are all in.
 
 ## System dependencies
 
