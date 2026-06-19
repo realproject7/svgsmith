@@ -84,15 +84,14 @@ svgsmith convert path/to/image.png --out out.svg --report json
 
 ## Gallery
 
-Each pair is the original raster (left) and the svgsmith SVG output (right), rendered at the
-same size. Fixtures are self-generated (see `tests/corpus/`).
+Each pair is the original raster (left) and the actual svgsmith SVG output (right),
+rendered at the same size.
 
-| | Original | svgsmith SVG |
+| | Original (PNG) | svgsmith (SVG) |
 |---|---|---|
-| **Logo** (`--mode binary`) | <img src="docs/gallery/logo_in.png" width="160"> | <img src="docs/gallery/logo_out.png" width="160"> |
-| **Icon** (`--mode binary`) | <img src="docs/gallery/icon_in.png" width="160"> | <img src="docs/gallery/icon_out.png" width="160"> |
-| **Illustration** (`--mode color`) | <img src="docs/gallery/illustration_in.png" width="160"> | <img src="docs/gallery/illustration_out.png" width="160"> |
-| **Pixel art** (`--mode pixel`) | <img src="docs/gallery/pixel_in.png" width="160"> | <img src="docs/gallery/pixel_out.png" width="160"> |
+| **Mascot** · `--detail high` | <img src="docs/gallery/mascot_before.png" width="200"> | <img src="docs/gallery/mascot_after.png" width="200"> |
+| **Portrait** · `--detail high` | <img src="docs/gallery/portrait_before.png" width="200"> | <img src="docs/gallery/portrait_after.png" width="200"> |
+| **Painterly** · `--detail clean` | <img src="docs/gallery/bee_before.png" width="200"> | <img src="docs/gallery/bee_after.png" width="200"> |
 
 ## Usage
 
@@ -121,11 +120,30 @@ svgsmith convert input.png \
 | `--out PATH` | `<input>.svg` | Output SVG path. |
 | `--report {off,json}` | `off` | Print a JSON report to stdout (the only thing on stdout). |
 
-> **Composable for agents.** svgsmith is meant to be driven by an AI agent that maps a
-> user's intent to flags. *"Detailed character on a clean flat background"* →
-> `--detail high --solid-background`; *"poster-style, minimal"* → `--detail poster`;
-> *"crisp logo"* → `--mode binary`; *"keep the raw look"* → `--no-smooth`. The
-> [`vectorize` skill](skills/vectorize/SKILL.md) encodes this mapping.
+## For AI agents — mapping a user's request to flags
+
+svgsmith is meant to be driven by an agent: the user describes what they want in plain
+language, and the agent translates that into flags. The flags **compose** — pick a mode
+(or let `auto` decide), then add refinements for what the user asked for.
+
+| If the user says… | The agent calls svgsmith with… |
+|---|---|
+| "vectorize / trace this", nothing specific | *(defaults)* `--mode auto` |
+| "clean logo", "crisp icon", black & white line art | `--mode binary --quality 0.95` |
+| "pixel art", "sprite" | `--mode pixel` |
+| "keep every detail / texture / shading" | `--detail high` |
+| "make it cleaner / tidier", "less noise" | `--detail clean` |
+| "poster / flat / bold graphic", "minimalist" | `--detail poster` |
+| "put it on a clean / solid background", "remove the background", "just the subject" | `--solid-background` |
+| "detailed character on a plain background" | `--detail high --solid-background` |
+| "even / consistent outline" (art that already has a dark outline) | `--uniform-outline` |
+| "keep the rough / hand-drawn look", "don't smooth" | `--no-smooth` |
+| "give it back as a PNG", "render / preview it" | `svgsmith rasterize out.svg` |
+
+Always pass `--report json` so the agent can read the result (mode used, similarity,
+warnings) and decide whether to accept, retry with a different flag, or tell the user
+why (e.g. a photo warning). The bundled [`vectorize` skill](skills/vectorize/SKILL.md)
+encodes this exact mapping and the accept/retry logic.
 
 ### Rasterize (SVG → PNG)
 
