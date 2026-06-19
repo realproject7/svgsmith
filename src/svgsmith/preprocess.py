@@ -33,6 +33,9 @@ class PreprocessOptions:
     quantize: bool = True
     palette_size: int = 16  # target palette; T3 preset can inform this
 
+    solid_background: bool = False  # replace the background with one clean solid color
+    subject_threshold: int = 60  # per-channel distance from bg color to count as subject
+
     uniform_outline: bool = False  # force a constant-width outline band (opt-in)
     outline_width: int = 8  # band half-width in px, used when uniform_outline is on
 
@@ -101,6 +104,47 @@ def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
         quantized = quantized.convert("RGBA")
         quantized.putalpha(img.getchannel("A"))
     return quantized
+
+
+def solid_background(img: Image.Image, threshold: int, min_fraction: float = 0.01) -> Image.Image:
+    """Isolate the subject and repaint everything else as one clean solid color.
+
+    Detects the subject as the significant connected regions that differ from the
+    dominant corner (background) color, then replaces all non-subject pixels with
+    the median background color. Removes texture, grain, streaks, and stray specks
+    so the background becomes a single flat fill — while the subject is untouched,
+    so its detail is fully preserved. Small specks below ``min_fraction`` of the
+    image are absorbed into the background rather than kept as noise.
+    """
+    from scipy import ndimage
+
+    rgb = np.array(img.convert("RGB"))
+    height, width = rgb.shape[:2]
+    corners = [
+        tuple(rgb[0, 0]),
+        tuple(rgb[0, -1]),
+        tuple(rgb[-1, 0]),
+        tuple(rgb[-1, -1]),
+    ]
+    background = np.array(max(set(corners), key=corners.count), dtype=int)
+    far = np.abs(rgb.astype(int) - background).max(axis=2) > threshold
+
+    labels, count = ndimage.label(far)
+    subject = np.zeros((height, width), dtype=bool)
+    if count:
+        min_pixels = min_fraction * height * width
+        sizes = ndimage.sum(np.ones_like(labels), labels, range(1, count + 1))
+        for index, size in enumerate(sizes, start=1):
+            if size >= min_pixels:
+                subject |= labels == index
+        subject = ndimage.binary_fill_holes(subject)
+        subject = ndimage.binary_closing(subject, iterations=2)
+
+    out = rgb.copy()
+    bg_pixels = rgb[~subject]
+    if bg_pixels.size:
+        out[~subject] = np.median(bg_pixels, axis=0).astype(np.uint8)
+    return Image.fromarray(out, "RGB").convert(img.mode)
 
 
 def uniform_outline(img: Image.Image, width: int, bg_tolerance: int = 18) -> Image.Image:
@@ -184,12 +228,15 @@ def remove_background(img: Image.Image, tolerance: int) -> Image.Image:
 def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Image.Image:
     """Run the enabled preprocessing steps in order and return an RGBA image.
 
-    Order: tiny-input upscale → denoise → quantize → background removal.
-    Background removal runs last so the cleared alpha is not quantized away.
+    Order: solid background → tiny-input upscale → denoise → flatten → quantize →
+    outline band → background removal. Solid-background runs first so the subject
+    is detected from the original colors before any flattening/quantization.
     """
     opts = opts or PreprocessOptions()
     img = load_image(image, "RGBA")
 
+    if opts.solid_background:
+        img = solid_background(img, opts.subject_threshold)
     if opts.upscale:
         img = upscale_tiny(img, opts.min_dimension)
     if opts.denoise:

@@ -113,3 +113,13 @@ def test_uniform_outline_is_opt_in_and_color_only():
     # The flag runs without error and still produces a valid color SVG report.
     assert on.mode_used == "color"
     assert on.svg.paths >= 1
+
+
+def test_solid_background_is_opt_in_and_runs():
+    on = convert(
+        str(FIXTURES / "illustration.png"),
+        ConvertOptions(max_iters=1, solid_background=True),
+    )[1]
+    # Off by default elsewhere; on, it still yields a valid color SVG report.
+    assert on.mode_used == "color"
+    assert on.svg.paths >= 1

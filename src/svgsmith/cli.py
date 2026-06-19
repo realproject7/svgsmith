@@ -53,6 +53,7 @@ def _convert(args: argparse.Namespace) -> int:
         editable=args.editable,
         smooth=args.smooth,
         uniform_outline=args.uniform_outline,
+        solid_background=args.solid_background,
         out=args.out,
     )
 
@@ -160,6 +161,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Force an even-width outline band (color mode). Opt-in: only for "
             "illustrations that already have a dark outline; would add a wrong "
             "border on line art."
+        ),
+    )
+    convert.add_argument(
+        "--solid-background",
+        action="store_true",
+        default=False,
+        help=(
+            "Isolate the subject and repaint the background as one clean solid "
+            "color, removing texture/grain/specks while keeping subject detail."
         ),
     )
     convert.add_argument(
