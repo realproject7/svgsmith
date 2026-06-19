@@ -123,3 +123,19 @@ def test_solid_background_is_opt_in_and_runs():
     # Off by default elsewhere; on, it still yields a valid color SVG report.
     assert on.mode_used == "color"
     assert on.svg.paths >= 1
+
+
+def test_detail_level_validation_and_spectrum():
+    import pytest
+
+    with pytest.raises(ValueError):
+        ConvertOptions(detail="ultra")
+    # The dial trades detail for flatness: higher levels keep fewer colors.
+    counts = {}
+    for level in ("high", "normal", "clean", "poster"):
+        _svg, rep = convert(
+            str(FIXTURES / "illustration.png"),
+            ConvertOptions(detail=level, max_iters=1),
+        )
+        counts[level] = rep.svg.colors
+    assert counts["high"] >= counts["normal"] >= counts["clean"] >= counts["poster"]

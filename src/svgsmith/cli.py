@@ -54,6 +54,7 @@ def _convert(args: argparse.Namespace) -> int:
         smooth=args.smooth,
         uniform_outline=args.uniform_outline,
         solid_background=args.solid_background,
+        detail=args.detail,
         out=args.out,
     )
 
@@ -161,6 +162,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Force an even-width outline band (color mode). Opt-in: only for "
             "illustrations that already have a dark outline; would add a wrong "
             "border on line art."
+        ),
+    )
+    convert.add_argument(
+        "--detail",
+        choices=["high", "normal", "clean", "poster"],
+        default="normal",
+        help=(
+            "Color detail dial (default: normal). high = maximum detail; "
+            "clean = edge-preserving cleanup, less noise; poster = bold flat graphic, "
+            "few colors."
         ),
     )
     convert.add_argument(

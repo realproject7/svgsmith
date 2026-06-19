@@ -31,9 +31,14 @@ Then add **refinement flags** based on what the user wants out of it (these comp
 | User wants | Add flag |
 |---|---|
 | "clean / flat / solid background", "remove the background texture", "just the subject on a plain color", "isolate the cat/logo/person" | `--solid-background` |
-| "keep maximum detail on the subject" | (default already preserves detail; `--solid-background` also helps by not spending the palette on background noise) |
+| "maximum detail", "keep every detail / texture / shading" | `--detail high` |
+| "cleaner / tidier", "less noise / grain", "smooth it out a bit" | `--detail clean` |
+| "poster / flat / bold graphic", "simple flat colors", "minimalist" | `--detail poster` |
 | "even / consistent outline", "uniform line weight" (only for art that already has a dark outline) | `--uniform-outline` |
 | "keep the raw / rough / hand-drawn look", "don't smooth it" | `--no-smooth` |
+
+`--detail` is the dial between fidelity and a clean/flat look; default `normal` is balanced.
+Flags compose, e.g. *"a detailed cat on a clean solid background"* → `--detail high --solid-background`.
 
 Always pass `--report json` and a sensible `--out` (default: input path with `.svg`).
 
