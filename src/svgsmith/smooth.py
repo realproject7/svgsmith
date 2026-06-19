@@ -41,6 +41,12 @@ def _perim(pts: np.ndarray) -> float:
     return float(np.sum(np.linalg.norm(np.diff(np.vstack([pts, pts[:1]]), axis=0), axis=1)))
 
 
+def _area(pts: np.ndarray) -> float:
+    """Absolute polygon area (shoelace) of a closed point ring."""
+    x, y = pts[:, 0], pts[:, 1]
+    return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) / 2.0)
+
+
 def _resample(pts: np.ndarray, n: int) -> np.ndarray:
     """Resample a closed polyline to ``n`` evenly-spaced points."""
     closed = np.vstack([pts, pts[:1]])
@@ -70,6 +76,27 @@ def _corner_indices(pts: np.ndarray, angle_deg: float) -> list[int]:
         if float(np.dot(prev[i], nxt[i])) / (na * nb) < thr:
             corners.append(i)
     return corners
+
+
+def _inflection_indices(pts: np.ndarray, min_turn: float) -> list[int]:
+    """Indices where the signed curvature changes sign (contour reversals).
+
+    Splitting an arc at its inflections keeps each piece single-curvature, so the
+    Bézier fit cannot average across a reversal — this is what preserves concave
+    features like a mouth 'W' (smooth curvature flips, but no sharp corner, so
+    corner detection alone misses them). Only reversals with meaningful turn on at
+    least one side count, so gentle wiggle on a smooth edge does not over-split.
+    """
+    n = len(pts)
+    prev = pts - np.roll(pts, 1, axis=0)
+    nxt = np.roll(pts, -1, axis=0) - pts
+    cross = prev[:, 0] * nxt[:, 1] - prev[:, 1] * nxt[:, 0]  # signed curvature proxy
+    out = []
+    for i in range(n):
+        c0, c1 = cross[i], cross[(i + 1) % n]
+        if c0 * c1 < 0 and (abs(c0) > min_turn or abs(c1) > min_turn):
+            out.append((i + 1) % n)
+    return out
 
 
 def _max_deviation(arc: np.ndarray) -> float:
@@ -260,14 +287,19 @@ def _smooth_d(
         if perim < min_perim:
             emit_raw(sub)  # tiny/thin feature: keep crisp detail
             continue
-        n = max(16, int(perim / 100 * pts_per_100))
-        # Detect corners on the RAW resample (before any smoothing) so sharp
-        # corners — stripe/rectangle vertices — are not rounded away first.
+        # Denser floor (24) so tight curvature reversals — e.g. a small mouth W —
+        # land between resample points rather than being missed and smoothed over.
+        n = max(24, int(perim / 100 * pts_per_100))
+        # Detect split points on the RAW resample (before any smoothing) so sharp
+        # corners (stripe vertices) AND curvature reversals (mouth W) are preserved.
         rs = _resample(pts, n)
-        corners = sorted(set(_corner_indices(rs, corner_deg)))
+        min_turn = (perim / n) ** 2 * 0.15  # scale to edge length; ignore tiny wiggle
+        splits = set(_corner_indices(rs, corner_deg)) | set(_inflection_indices(rs, min_turn))
+        corners = sorted(splits)
         if len(corners) < 2:
             corners = [0, len(rs) // 2]
-        chunks.append(f"M{fmt(rs[corners[0]])}")
+        sub_chunks = [f"M{fmt(rs[corners[0]])}"]
+        contour = [rs[corners[0]]]  # sampled smoothed outline, for the fidelity check
         for j in range(len(corners)):
             a, b = corners[j], corners[(j + 1) % len(corners)]
             if b > a:
@@ -276,12 +308,22 @@ def _smooth_d(
                 idx = list(range(a, len(rs))) + list(range(0, b + 1))
             arc = rs[idx]
             if len(arc) < 3 or _max_deviation(arc) <= straight_tol:
-                chunks.append(f"L{fmt(arc[-1])}")  # straight edge stays crisp
+                sub_chunks.append(f"L{fmt(arc[-1])}")  # straight edge stays crisp
+                contour.append(arc[-1])
             else:
                 # Light per-arc denoise (endpoints/corners pinned) then fit.
                 for ctrl in _fit_arc(_gaussian(arc, sigma), tol):
-                    chunks.append(f"C{fmt(ctrl[1])} {fmt(ctrl[2])} {fmt(ctrl[3])}")
-        chunks.append("Z")
+                    sub_chunks.append(f"C{fmt(ctrl[1])} {fmt(ctrl[2])} {fmt(ctrl[3])}")
+                    contour.extend(_bezier_point(ctrl, t) for t in (0.25, 0.5, 0.75, 1.0))
+        # Per-feature fidelity guard: if smoothing changed the enclosed area too much
+        # (it filled a concavity — e.g. averaged across a mouth 'W' into a blob), keep
+        # the crisp raw geometry instead. Protects small concave features the global
+        # SSIM guard is too coarse to catch.
+        if abs(_area(np.array(contour)) - _area(rs)) <= _area(rs) * 0.14:
+            chunks.extend(sub_chunks)
+            chunks.append("Z")
+        else:
+            emit_raw(sub)
     return "".join(chunks)
 
 

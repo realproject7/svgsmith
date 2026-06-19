@@ -216,12 +216,22 @@ def _subpath_points(sub: _Subpath, samples: int) -> list[Point]:
     return points
 
 
+# A curve counts as "straight" only if its control points hug the chord both in
+# absolute terms (epsilon, for long flat edges) AND relative to its own chord
+# length. The relative test protects small features: an eye's cubic has a chord of
+# only ~10px, so its real 2px bulge is 20% of the chord — clearly curved — yet sits
+# under the absolute epsilon (~2px) and was being flattened into a polygon.
+_LINEAR_CHORD_FRACTION = 0.04
+
+
 def _is_linear_segment(p0: Point, seg: Segment, epsilon: float) -> bool:
     """True for a line, or a curve whose control points hug its chord."""
     if seg[0] == "L":
         return True
     end = seg[-1]
-    return all(_perpendicular_distance(c, p0, end) <= epsilon for c in seg[1:-1])
+    chord = ((end[0] - p0[0]) ** 2 + (end[1] - p0[1]) ** 2) ** 0.5
+    limit = min(epsilon, chord * _LINEAR_CHORD_FRACTION)
+    return all(_perpendicular_distance(c, p0, end) <= limit for c in seg[1:-1])
 
 
 def simplify_subpath(sub: _Subpath, epsilon: float) -> _Subpath:
