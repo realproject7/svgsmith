@@ -47,6 +47,7 @@ class ConvertOptions:
     smooth: bool = True  # curve-refit color output (Schneider Bezier fit) for smooth contours
     uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
     solid_background: bool = False  # opt-in: isolate subject, repaint background one solid color
+    background: str | None = None  # exact bg color (#RRGGBB/named); "auto" == --solid-background
     detail: str = "normal"  # color detail dial: high | normal | clean | poster
     out: str | None = None
 
@@ -59,6 +60,11 @@ class ConvertOptions:
             raise ValueError(
                 f"detail must be one of {', '.join(DETAIL_LEVELS)}, got {self.detail!r}"
             )
+        if self.background not in (None, "auto"):
+            # Fail fast on a bad color rather than surfacing it mid-pipeline.
+            from svgsmith.preprocess import _parse_color
+
+            _parse_color(self.background)
 
 
 def _resolve_classification(image, mode: str) -> Classification:
@@ -123,8 +129,11 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
     if opts.uniform_outline and classification.mode == "color":
         pre_opts = replace(pre_opts, uniform_outline=True)
-    if opts.solid_background:
-        pre_opts = replace(pre_opts, solid_background=True)
+    # --solid-background is the auto case of --background; an explicit color (other
+    # than "auto") repaints the detected background to that exact color.
+    if opts.solid_background or opts.background is not None:
+        target = None if opts.background in (None, "auto") else opts.background
+        pre_opts = replace(pre_opts, solid_background=True, background_color=target)
     prepared = preprocess(image, pre_opts)
 
     svg, result = run_loop(

@@ -54,6 +54,7 @@ def _convert(args: argparse.Namespace) -> int:
         smooth=args.smooth,
         uniform_outline=args.uniform_outline,
         solid_background=args.solid_background,
+        background=args.background,
         detail=args.detail,
         out=args.out,
     )
@@ -209,7 +210,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "Isolate the subject and repaint the background as one clean solid "
-            "color, removing texture/grain/specks while keeping subject detail."
+            "color, removing texture/grain/specks while keeping subject detail. "
+            "Equivalent to --background auto."
+        ),
+    )
+    convert.add_argument(
+        "--background",
+        default=None,
+        metavar="COLOR",
+        help=(
+            "Isolate the subject and repaint the detected background to COLOR — a "
+            "hex value (#RRGGBB) or named color (e.g. white). Use 'auto' for the "
+            "median detected color (same as --solid-background)."
         ),
     )
     convert.add_argument(

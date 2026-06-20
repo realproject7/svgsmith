@@ -11,6 +11,7 @@ from svgsmith.preprocess import (
     preprocess,
     quantize_colors,
     remove_background,
+    solid_background,
     upscale_tiny,
 )
 
@@ -102,3 +103,37 @@ def test_steps_are_individually_toggleable():
 
 def test_preprocess_returns_rgba():
     assert preprocess(FLAT_BG).mode == "RGBA"
+
+
+def _pink_ear_fixture() -> Image.Image:
+    """Pink wall with a subject blob that matches the wall color but is enclosed
+    by a darker outline — the #53 "pink ear on a pink wall" case."""
+    pink = (235, 170, 200)
+    outline = (40, 40, 40)
+    arr = np.full((60, 60, 3), pink, dtype=np.uint8)
+    # A ring of dark outline (rows/cols 20..40) with a pink-filled interior.
+    arr[20:41, 20:41] = outline
+    arr[24:37, 24:37] = pink  # enclosed subject region, same color as the background
+    return Image.fromarray(arr, "RGB")
+
+
+def test_solid_background_keeps_enclosed_same_color_subject():
+    img = _pink_ear_fixture()
+    out = np.asarray(solid_background(img, tolerance=24, target_color="#FFFFFF"))
+
+    # The true edge-connected background flattens to the target white.
+    assert tuple(out[0, 0]) == (255, 255, 255)
+    # The enclosed pink region, though it shares the wall color, is NOT
+    # edge-connected (the dark outline blocks the flood fill) — it survives.
+    assert tuple(out[30, 30]) == (235, 170, 200)
+    # The dark outline (subject) is also preserved.
+    assert tuple(out[20, 30]) == (40, 40, 40)
+
+
+def test_solid_background_auto_uses_median_color():
+    img = _pink_ear_fixture()
+    out = np.asarray(solid_background(img, tolerance=24))
+    # Auto mode repaints the bg to the detected (pink) color, enclosed blob kept.
+    assert tuple(out[0, 0]) == (235, 170, 200)
+    assert tuple(out[30, 30]) == (235, 170, 200)
+    assert tuple(out[20, 30]) == (40, 40, 40)

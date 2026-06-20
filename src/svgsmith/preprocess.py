@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageColor, ImageFilter
 
 from svgsmith.engines.base import ImageInput, load_image
 
@@ -34,7 +34,8 @@ class PreprocessOptions:
     palette_size: int = 16  # target palette; T3 preset can inform this
 
     solid_background: bool = False  # replace the background with one clean solid color
-    subject_threshold: int = 60  # per-channel distance from bg color to count as subject
+    background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
+    background_color: str | None = None  # exact bg color (#RRGGBB/named); None = auto median
 
     uniform_outline: bool = False  # force a constant-width outline band (opt-in)
     outline_width: int = 8  # band half-width in px, used when uniform_outline is on
@@ -106,44 +107,88 @@ def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
     return quantized
 
 
-def solid_background(img: Image.Image, threshold: int, min_fraction: float = 0.01) -> Image.Image:
+def _edge_flood_fill_mask(rgba: np.ndarray, tolerance: int) -> np.ndarray:
+    """Boolean mask of background pixels reachable by flood-fill from the borders.
+
+    The background color is the dominant image corner; a pixel counts as background
+    when it is within ``tolerance`` (per channel) of that color AND is connected to
+    the image edge through other such pixels. Interior regions that merely *match*
+    the background color but are enclosed by the subject's outline are therefore
+    NOT marked — they stay subject. ``rgba`` is an HxWx(3 or 4) uint8 array; only
+    the RGB channels are used. Returns an HxW bool mask (True = background).
+    """
+    height, width = rgba.shape[:2]
+    rgb = rgba[:, :, :3].astype(np.int16)
+    corners = [
+        tuple(rgba[0, 0, :3]),
+        tuple(rgba[0, width - 1, :3]),
+        tuple(rgba[height - 1, 0, :3]),
+        tuple(rgba[height - 1, width - 1, :3]),
+    ]
+    background = np.array(max(set(corners), key=corners.count), dtype=np.int16)
+    close = np.abs(rgb - background).max(axis=2) <= tolerance
+
+    visited = np.zeros((height, width), dtype=bool)
+    queue: deque[tuple[int, int]] = deque()
+    for x in range(width):
+        for y in (0, height - 1):
+            if close[y, x] and not visited[y, x]:
+                visited[y, x] = True
+                queue.append((y, x))
+    for y in range(height):
+        for x in (0, width - 1):
+            if close[y, x] and not visited[y, x]:
+                visited[y, x] = True
+                queue.append((y, x))
+
+    while queue:
+        y, x = queue.popleft()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < height and 0 <= nx < width and close[ny, nx] and not visited[ny, nx]:
+                visited[ny, nx] = True
+                queue.append((ny, nx))
+
+    return visited
+
+
+def _parse_color(color: str) -> tuple[int, int, int]:
+    """Parse a hex (``#RRGGBB``) or named color into an RGB triple.
+
+    Accepts anything :func:`PIL.ImageColor.getrgb` understands (hex, named colors).
+    Raises ``ValueError`` with a clear message on an unrecognized color.
+    """
+    try:
+        return ImageColor.getrgb(color)[:3]
+    except ValueError as exc:
+        raise ValueError(f"invalid background color {color!r}: {exc}") from exc
+
+
+def solid_background(
+    img: Image.Image, tolerance: int, target_color: str | None = None
+) -> Image.Image:
     """Isolate the subject and repaint everything else as one clean solid color.
 
-    Detects the subject as the significant connected regions that differ from the
-    dominant corner (background) color, then replaces all non-subject pixels with
-    the median background color. Removes texture, grain, streaks, and stray specks
-    so the background becomes a single flat fill — while the subject is untouched,
-    so its detail is fully preserved. Small specks below ``min_fraction`` of the
-    image are absorbed into the background rather than kept as noise.
+    The background is the region reachable by edge flood-fill from the image
+    borders (see :func:`_edge_flood_fill_mask`); the subject is everything not
+    edge-connected, so a subject region that happens to share the background color
+    but is enclosed by an outline (a pink ear on a pink wall) is kept, not punched
+    into a hole. All background pixels are then flattened to one solid color —
+    ``target_color`` when given (an exact ``#RRGGBB`` or named color), otherwise the
+    median background color — removing texture, grain, streaks, and stray specks
+    while the subject is left untouched.
     """
-    from scipy import ndimage
-
     rgb = np.array(img.convert("RGB"))
-    height, width = rgb.shape[:2]
-    corners = [
-        tuple(rgb[0, 0]),
-        tuple(rgb[0, -1]),
-        tuple(rgb[-1, 0]),
-        tuple(rgb[-1, -1]),
-    ]
-    background = np.array(max(set(corners), key=corners.count), dtype=int)
-    far = np.abs(rgb.astype(int) - background).max(axis=2) > threshold
-
-    labels, count = ndimage.label(far)
-    subject = np.zeros((height, width), dtype=bool)
-    if count:
-        min_pixels = min_fraction * height * width
-        sizes = ndimage.sum(np.ones_like(labels), labels, range(1, count + 1))
-        for index, size in enumerate(sizes, start=1):
-            if size >= min_pixels:
-                subject |= labels == index
-        subject = ndimage.binary_fill_holes(subject)
-        subject = ndimage.binary_closing(subject, iterations=2)
+    background_mask = _edge_flood_fill_mask(rgb, tolerance)
 
     out = rgb.copy()
-    bg_pixels = rgb[~subject]
-    if bg_pixels.size:
-        out[~subject] = np.median(bg_pixels, axis=0).astype(np.uint8)
+    if target_color is not None:
+        fill = np.array(_parse_color(target_color), dtype=np.uint8)
+        out[background_mask] = fill
+    else:
+        bg_pixels = rgb[background_mask]
+        if bg_pixels.size:
+            out[background_mask] = np.median(bg_pixels, axis=0).astype(np.uint8)
     return Image.fromarray(out, "RGB").convert(img.mode)
 
 
@@ -187,41 +232,8 @@ def remove_background(img: Image.Image, tolerance: int) -> Image.Image:
     regions that happen to match the background color are kept opaque.
     """
     rgba = np.array(img.convert("RGBA"))
-    height, width = rgba.shape[:2]
-    rgb = rgba[:, :, :3].astype(np.int16)
-
-    corners = [
-        tuple(rgba[0, 0, :3]),
-        tuple(rgba[0, width - 1, :3]),
-        tuple(rgba[height - 1, 0, :3]),
-        tuple(rgba[height - 1, width - 1, :3]),
-    ]
-    background = np.array(max(set(corners), key=corners.count), dtype=np.int16)
-
-    close = np.abs(rgb - background).max(axis=2) <= tolerance
-
-    visited = np.zeros((height, width), dtype=bool)
-    queue: deque[tuple[int, int]] = deque()
-    for x in range(width):
-        for y in (0, height - 1):
-            if close[y, x] and not visited[y, x]:
-                visited[y, x] = True
-                queue.append((y, x))
-    for y in range(height):
-        for x in (0, width - 1):
-            if close[y, x] and not visited[y, x]:
-                visited[y, x] = True
-                queue.append((y, x))
-
-    while queue:
-        y, x = queue.popleft()
-        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < height and 0 <= nx < width and close[ny, nx] and not visited[ny, nx]:
-                visited[ny, nx] = True
-                queue.append((ny, nx))
-
-    rgba[visited, 3] = 0
+    background_mask = _edge_flood_fill_mask(rgba, tolerance)
+    rgba[background_mask, 3] = 0
     return Image.fromarray(rgba, "RGBA")
 
 
@@ -236,7 +248,7 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
     img = load_image(image, "RGBA")
 
     if opts.solid_background:
-        img = solid_background(img, opts.subject_threshold)
+        img = solid_background(img, opts.background_tolerance, opts.background_color)
     if opts.upscale:
         img = upscale_tiny(img, opts.min_dimension)
     if opts.denoise:
