@@ -116,6 +116,9 @@ svgsmith convert input.png \
 | `--smooth` / `--no-smooth` | on | Curve-refit color contours into smooth, sparse Béziers (Schneider least-squares). |
 | `--detail {high,normal,clean,poster}` | `normal` | Color detail dial. `high` = maximum detail; `clean` = edge-preserving cleanup (less noise/grain); `poster` = bold flat graphic with few colors. |
 | `--solid-background` | off | Isolate the subject and repaint the background as one clean solid color — removes texture/grain/specks while keeping subject detail. |
+| `--background COLOR` | off | Like `--solid-background`, but repaint the detected background to a **specific** color (`#RRGGBB` or named, e.g. `white`). `auto` = the detected median. |
+| `--transparent-background` | off | **Remove** the background instead of repainting it — the edge-connected background is cut, leaving a **transparent** SVG. The subject is kept even where it shares the background color (color mode). |
+| `--flatten-shading` | off | Collapse soft/glossy shading before tracing (color mode) so smooth gradients (e.g. satin sheen) become clean flat regions instead of shattering into tiny "scratch" facets — a cleaner graphic look and smaller file. |
 | `--uniform-outline` | off | Force an even-width outline band (outlined illustrations only; would add a wrong border on line art). |
 | `--out PATH` | `<input>.svg` | Output SVG path. |
 | `--report {off,json}` | `off` | Print a JSON report to stdout (the only thing on stdout). |
@@ -134,8 +137,11 @@ language, and the agent translates that into flags. The flags **compose** — pi
 | "keep every detail / texture / shading" | `--detail high` |
 | "make it cleaner / tidier", "less noise" | `--detail clean` |
 | "poster / flat / bold graphic", "minimalist" | `--detail poster` |
-| "put it on a clean / solid background", "remove the background", "just the subject" | `--solid-background` |
+| "put it on a clean / solid background", "just the subject on a flat background" | `--solid-background` |
+| "make the background white / `<color>`", "change / swap the background color" | `--background white` |
+| "cut it out", "transparent background", "remove the background entirely", "just the subject, no background" | `--transparent-background` |
 | "detailed character on a plain background" | `--detail high --solid-background` |
+| "it looks scratchy / shattered / broken", "glossy or shiny art isn't clean", "flatten the shading" | `--flatten-shading` |
 | "even / consistent outline" (art that already has a dark outline) | `--uniform-outline` |
 | "keep the rough / hand-drawn look", "don't smooth" | `--no-smooth` |
 | "give it back as a PNG", "render / preview it" | `svgsmith rasterize out.svg` |

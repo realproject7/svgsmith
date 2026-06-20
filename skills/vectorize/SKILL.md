@@ -31,9 +31,12 @@ Then add **refinement flags** based on what the user wants out of it (these comp
 | User wants | Add flag |
 |---|---|
 | "clean / flat / solid background", "remove the background texture", "just the subject on a plain color", "isolate the cat/logo/person" | `--solid-background` |
+| "make the background white / `<color>`", "change / swap the background color" | `--background white` |
+| "cut it out", "transparent background", "remove the background entirely", "just the subject, no background" | `--transparent-background` |
 | "maximum detail", "keep every detail / texture / shading" | `--detail high` |
 | "cleaner / tidier", "less noise / grain", "smooth it out a bit" | `--detail clean` |
 | "poster / flat / bold graphic", "simple flat colors", "minimalist" | `--detail poster` |
+| "it looks scratchy / shattered / broken", "glossy or shiny art isn't clean", "flatten the shading" | `--flatten-shading` |
 | "even / consistent outline", "uniform line weight" (only for art that already has a dark outline) | `--uniform-outline` |
 | "keep the raw / rough / hand-drawn look", "don't smooth it" | `--no-smooth` |
 
