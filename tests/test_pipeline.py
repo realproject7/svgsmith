@@ -24,6 +24,33 @@ def test_convert_options_rejects_out_of_range_values(kwargs):
         ConvertOptions(**kwargs)
 
 
+def test_transparent_background_removes_bg_keeps_subject(tmp_path):
+    """--transparent-background drops the edge-connected background, leaving the
+    subject on transparency (region-based, so subject detail is preserved)."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from svgsmith.render import rasterize
+
+    # A blue subject on a uniform red background.
+    image = Image.new("RGB", (96, 96), (230, 80, 80))
+    ImageDraw.Draw(image).ellipse([28, 28, 68, 68], fill=(40, 60, 200))
+    src = tmp_path / "subject.png"
+    image.save(src)
+
+    opts = ConvertOptions(mode="color", transparent_background=True, max_iters=2)
+    svg, _ = convert(str(src), opts)
+    svg_path = tmp_path / "out.svg"
+    svg_path.write_text(svg, encoding="utf-8")
+    png_path = tmp_path / "out.png"
+    rasterize(str(svg_path), str(png_path), width=96)  # no background → transparent
+
+    alpha = np.asarray(Image.open(png_path).convert("RGBA"))[:, :, 3]
+    assert alpha[3, 3] == 0  # corner background removed
+    assert alpha[-4, -4] == 0
+    assert alpha[48, 48] > 0  # centered subject kept
+
+
 @pytest.mark.parametrize("name", ALL_FIXTURES)
 def test_convert_produces_valid_svg_and_consistent_report(name):
     svg, report = convert(str(FIXTURES / name), ConvertOptions(max_iters=2))
