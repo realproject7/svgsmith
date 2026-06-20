@@ -125,6 +125,39 @@ def test_solid_background_is_opt_in_and_runs():
     assert on.svg.paths >= 1
 
 
+def test_background_color_repaints_to_exact_color():
+    import numpy as np
+
+    from svgsmith.preprocess import PreprocessOptions, preprocess
+
+    # The CLI/pipeline threads --background "#FFFFFF" into preprocess as an exact
+    # target color: every edge-connected background pixel becomes pure white while
+    # the subject is preserved. Assert on the preprocessed raster (the trace is
+    # lossy) so the exact-color contract is checked deterministically.
+    prepared = preprocess(
+        str(FIXTURES / "illustration.png"),
+        PreprocessOptions(solid_background=True, background_color="#FFFFFF"),
+    )
+    arr = np.asarray(prepared.convert("RGB"))
+    assert tuple(arr[0, 0]) == (255, 255, 255)
+    assert tuple(arr[0, -1]) == (255, 255, 255)
+    # The subject (image center) is not flattened to white.
+    assert tuple(arr[arr.shape[0] // 2, arr.shape[1] // 2]) != (255, 255, 255)
+    # The whole pipeline accepts the flag and still produces a valid SVG.
+    report = convert(
+        str(FIXTURES / "illustration.png"),
+        ConvertOptions(max_iters=1, background="#FFFFFF"),
+    )[1]
+    assert report.svg.paths >= 1
+
+
+def test_background_invalid_color_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        ConvertOptions(background="not-a-color")
+
+
 def test_detail_level_validation_and_spectrum():
     import pytest
 
