@@ -55,6 +55,7 @@ def _convert(args: argparse.Namespace) -> int:
         uniform_outline=args.uniform_outline,
         solid_background=args.solid_background,
         background=args.background,
+        transparent_background=args.transparent_background,
         detail=args.detail,
         out=args.out,
     )
@@ -222,6 +223,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Isolate the subject and repaint the detected background to COLOR — a "
             "hex value (#RRGGBB) or named color (e.g. white). Use 'auto' for the "
             "median detected color (same as --solid-background)."
+        ),
+    )
+    convert.add_argument(
+        "--transparent-background",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the background instead of repainting it — the edge-connected "
+            "background is cut from the result, leaving a transparent SVG. The "
+            "subject is preserved even where it shares the background color."
         ),
     )
     convert.add_argument(

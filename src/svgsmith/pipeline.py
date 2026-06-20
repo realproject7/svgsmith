@@ -10,12 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import numpy as np
+
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
-from svgsmith.preprocess import PreprocessOptions, preprocess
+from svgsmith.postprocess import drop_background_paths
+from svgsmith.preprocess import PreprocessOptions, _edge_flood_fill_mask, preprocess
 from svgsmith.report import Report, svg_stats
 from svgsmith.smooth import smooth_svg
 from svgsmith.verify import rasterize, run_loop, score
+
+_DEFAULT_BG_TOLERANCE = PreprocessOptions().background_tolerance
 
 # Mode → engine label and the preset used when --mode is given explicitly.
 _ENGINE = {"binary": "potrace", "color": "vtracer", "pixel": "vtracer"}
@@ -48,6 +53,7 @@ class ConvertOptions:
     uniform_outline: bool = False  # opt-in: force an even outline band (outlined art only)
     solid_background: bool = False  # opt-in: isolate subject, repaint background one solid color
     background: str | None = None  # exact bg color (#RRGGBB/named); "auto" == --solid-background
+    transparent_background: bool = False  # opt-in: drop the background → transparent SVG
     detail: str = "normal"  # color detail dial: high | normal | clean | poster
     out: str | None = None
 
@@ -158,6 +164,17 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         smoothed_score = score(reference, rasterize(smoothed, reference.size))
         if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
             svg, similarity = smoothed, smoothed_score
+
+    # Transparent background: trace/verify ran normally (with the background), so
+    # the loop is unaffected; here we cut the edge-connected background paths from
+    # the final SVG using a region mask (subjects sharing the bg colour are kept).
+    # Color mode only — its paths live in viewBox space; binary/pixel line-art is
+    # already foreground-only, so there is no background layer to remove.
+    if opts.transparent_background and classification.mode == "color":
+        bg_mask = _edge_flood_fill_mask(
+            np.array(load_image(input_path, "RGBA")), _DEFAULT_BG_TOLERANCE
+        )
+        svg = drop_background_paths(svg, bg_mask)
 
     output = _output_path(input_path, opts.out)
     report = Report(

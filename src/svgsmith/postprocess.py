@@ -16,6 +16,8 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
+import numpy as np
+
 SVG_NS = "http://www.w3.org/2000/svg"
 _NUMBER = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
 _TOKEN = re.compile(r"[MmLlHhVvCcSsQqTtZz]|" + _NUMBER.pattern)
@@ -566,6 +568,62 @@ def count_path_points(svg_str: str) -> int:
         for p in _collect_paths(root)
         for sub in parse_path(p["d"])
     )
+
+
+_TRANSLATE_RE = re.compile(r"translate\(\s*([-\d.]+)(?:[ ,]+([-\d.]+))?\s*\)")
+
+
+def _translate_of(transform: str) -> Point:
+    """Sum the translate() offsets in a transform string (tracer output only
+    uses translate, so other primitives are ignored)."""
+    tx = ty = 0.0
+    for match in _TRANSLATE_RE.finditer(transform or ""):
+        tx += float(match.group(1))
+        ty += float(match.group(2)) if match.group(2) is not None else 0.0
+    return tx, ty
+
+
+def drop_background_paths(svg_str: str, bg_mask: np.ndarray) -> str:
+    """Remove the edge-connected background, leaving a transparent SVG.
+
+    ``bg_mask`` is an HxW bool array (True = background, from the edge flood-fill).
+    Path coordinates live in the tracer's viewBox space (after applying each path's
+    translate), mapped onto the mask by fraction so any tracer upscale is handled.
+    A path is dropped when it covers ~the whole canvas (the tracer's base
+    rectangle) or when most of its sampled points fall in the background —
+    region-based, so a subject that shares the background colour is kept.
+    """
+    root = ET.fromstring(svg_str)
+    geom_w, geom_h = _geometry_size(root)
+    if not (geom_w and geom_h):
+        return svg_str
+    mask_h, mask_w = bg_mask.shape
+    canvas_area = geom_w * geom_h
+
+    kept: list[dict] = []
+    for path in _collect_paths(root):
+        tx, ty = _translate_of(path["transform"])
+        points = [
+            (x + tx, y + ty)
+            for sub in parse_path(path["d"])
+            for x, y in _subpath_points(sub, 6)
+        ]
+        if not points:
+            continue
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        if (max(xs) - min(xs)) * (max(ys) - min(ys)) >= 0.95 * canvas_area:
+            continue  # full-canvas base / background rectangle
+        background = 0
+        for x, y in points:
+            ix = min(mask_w - 1, max(0, int(x / geom_w * mask_w)))
+            iy = min(mask_h - 1, max(0, int(y / geom_h * mask_h)))
+            if bg_mask[iy, ix]:
+                background += 1
+        if background * 2 > len(points):
+            continue  # majority of the outline sits in the background
+        kept.append(path)
+    return _build_svg(root, kept, True)
 
 
 def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, float] | None:
