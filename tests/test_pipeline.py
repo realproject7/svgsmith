@@ -24,6 +24,23 @@ def test_convert_options_rejects_out_of_range_values(kwargs):
         ConvertOptions(**kwargs)
 
 
+def test_flatten_shading_reduces_facets_on_gradients(tmp_path):
+    """--flatten-shading collapses smooth shading, so a noisy gradient traces into
+    fewer paths than the default."""
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(0)
+    ramp = np.add.outer(np.linspace(0, 200, 96), np.linspace(0, 40, 96))
+    base = np.clip(ramp[..., None] + rng.normal(0, 6, (96, 96, 3)), 0, 255)
+    Image.fromarray(base.astype(np.uint8), "RGB").save(tmp_path / "gradient.png")
+    src = str(tmp_path / "gradient.png")
+
+    plain = convert(src, ConvertOptions(mode="color", max_iters=2))[0]
+    flat = convert(src, ConvertOptions(mode="color", max_iters=2, flatten_shading=True))[0]
+    assert flat.count("<path") < plain.count("<path")
+
+
 def test_transparent_background_removes_bg_keeps_subject(tmp_path):
     """--transparent-background drops the edge-connected background, leaving the
     subject on transparency (region-based, so subject detail is preserved)."""

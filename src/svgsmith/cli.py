@@ -56,6 +56,7 @@ def _convert(args: argparse.Namespace) -> int:
         solid_background=args.solid_background,
         background=args.background,
         transparent_background=args.transparent_background,
+        flatten_shading=args.flatten_shading,
         detail=args.detail,
         out=args.out,
     )
@@ -233,6 +234,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Remove the background instead of repainting it — the edge-connected "
             "background is cut from the result, leaving a transparent SVG. The "
             "subject is preserved even where it shares the background color."
+        ),
+    )
+    convert.add_argument(
+        "--flatten-shading",
+        action="store_true",
+        default=False,
+        help=(
+            "Collapse soft/glossy shading before tracing (color mode). Smooth "
+            "gradients (e.g. satin sheen) become clean flat regions instead of "
+            "shattering into tiny 'scratch' facets — trades fine shading for a "
+            "cleaner graphic look and a much smaller file."
         ),
     )
     convert.add_argument(

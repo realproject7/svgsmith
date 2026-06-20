@@ -29,7 +29,9 @@ BINARY_MAX_PALETTE = 3  # monochrome-ish ink-on-paper
 BINARY_MIN_EDGE_DENSITY = 0.02  # ...with sharp edges
 EDGE_MAGNITUDE_CUTOFF = 40  # grayscale edge strength counted as a "strong" edge
 
-PHOTO_WARNING = "photographic gradients; vectorization may bloat"
+PHOTO_WARNING = (
+    "photographic gradients; vectorization may bloat — try --flatten-shading for a cleaner result"
+)
 
 
 class Classification(NamedTuple):
