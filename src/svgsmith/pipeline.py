@@ -54,6 +54,7 @@ class ConvertOptions:
     solid_background: bool = False  # opt-in: isolate subject, repaint background one solid color
     background: str | None = None  # exact bg color (#RRGGBB/named); "auto" == --solid-background
     transparent_background: bool = False  # opt-in: drop the background → transparent SVG
+    flatten_shading: bool = False  # opt-in: collapse soft/glossy shading before tracing
     detail: str = "normal"  # color detail dial: high | normal | clean | poster
     out: str | None = None
 
@@ -135,6 +136,11 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
     if opts.uniform_outline and classification.mode == "color":
         pre_opts = replace(pre_opts, uniform_outline=True)
+    # Flatten soft/glossy shading before tracing so smooth gradients collapse into
+    # clean flat regions instead of shattering into scratch facets (opt-in; trades
+    # fine shading for a cleaner graphic look).
+    if opts.flatten_shading and classification.mode == "color":
+        pre_opts = replace(pre_opts, flatten=True, flatten_sigma=0.18, flatten_spatial=8)
     # --solid-background is the auto case of --background; an explicit color (other
     # than "auto") repaints the detected background to that exact color.
     if opts.solid_background or opts.background is not None:

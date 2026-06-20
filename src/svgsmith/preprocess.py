@@ -29,6 +29,7 @@ class PreprocessOptions:
 
     flatten: bool = False  # edge-preserving color flattening (bilateral)
     flatten_sigma: float = 0.04  # color sigma; higher = flatter regions
+    flatten_spatial: int = 4  # bilateral spatial sigma; higher = wider smoothing
 
     quantize: bool = True
     palette_size: int = 16  # target palette; T3 preset can inform this
@@ -71,7 +72,7 @@ def denoise(img: Image.Image, median_size: int) -> Image.Image:
     return filtered
 
 
-def flatten_colors(img: Image.Image, sigma_color: float) -> Image.Image:
+def flatten_colors(img: Image.Image, sigma_color: float, sigma_spatial: int = 4) -> Image.Image:
     """Edge-preserving bilateral smoothing to flatten color variation.
 
     Softens gradients and texture *within* regions while keeping edges sharp, so
@@ -82,7 +83,9 @@ def flatten_colors(img: Image.Image, sigma_color: float) -> Image.Image:
     from skimage.restoration import denoise_bilateral
 
     rgb = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
-    smoothed = denoise_bilateral(rgb, sigma_color=sigma_color, sigma_spatial=4, channel_axis=2)
+    smoothed = denoise_bilateral(
+        rgb, sigma_color=sigma_color, sigma_spatial=sigma_spatial, channel_axis=2
+    )
     out = Image.fromarray((smoothed * 255.0).round().astype(np.uint8), "RGB")
     if img.mode == "RGBA":
         out = out.convert("RGBA")
@@ -254,7 +257,7 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
     if opts.denoise:
         img = denoise(img, opts.median_size)
     if opts.flatten:
-        img = flatten_colors(img, opts.flatten_sigma)
+        img = flatten_colors(img, opts.flatten_sigma, opts.flatten_spatial)
     if opts.quantize:
         img = quantize_colors(img, opts.palette_size)
     if opts.uniform_outline:
