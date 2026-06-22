@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/svgsmith.svg)](https://pypi.org/project/svgsmith/)
 [![Python](https://img.shields.io/pypi/pyversions/svgsmith.svg)](https://pypi.org/project/svgsmith/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/realproject7/svgsmith/blob/main/LICENSE)
 [![CI](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml)
 
 ```bash
@@ -25,7 +25,7 @@ missing for agent use: routing, editable output, and a self-verification loop.
 
 > **Status:** released — `svgsmith 0.1.0` is on [PyPI](https://pypi.org/project/svgsmith/).
 > Engine routing, editable post-processing, the self-verify loop, the CLI + JSON report,
-> SVG→PNG rasterization, and the [`vectorize` skill](skills/vectorize/SKILL.md) are all in.
+> SVG→PNG rasterization, and the [`vectorize` skill](https://github.com/realproject7/svgsmith/blob/main/skills/vectorize/SKILL.md) are all in.
 
 ## System dependencies
 
@@ -89,9 +89,9 @@ rendered at the same size.
 
 | | Original (PNG) | svgsmith (SVG) |
 |---|---|---|
-| **Mascot** · `--detail high` | <img src="docs/gallery/mascot_before.png" width="200"> | <img src="docs/gallery/mascot_after.png" width="200"> |
-| **Portrait** · `--detail high` | <img src="docs/gallery/portrait_before.png" width="200"> | <img src="docs/gallery/portrait_after.png" width="200"> |
-| **Painterly** · `--detail clean` | <img src="docs/gallery/bee_before.png" width="200"> | <img src="docs/gallery/bee_after.png" width="200"> |
+| **Mascot** · `--detail high` | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/mascot_before.png" width="200"> | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/mascot_after.png" width="200"> |
+| **Portrait** · `--detail high` | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/portrait_before.png" width="200"> | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/portrait_after.png" width="200"> |
+| **Painterly** · `--detail clean` | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/bee_before.png" width="200"> | <img src="https://raw.githubusercontent.com/realproject7/svgsmith/main/docs/gallery/bee_after.png" width="200"> |
 
 ## Usage
 
@@ -148,7 +148,7 @@ language, and the agent translates that into flags. The flags **compose** — pi
 
 Always pass `--report json` so the agent can read the result (mode used, similarity,
 warnings) and decide whether to accept, retry with a different flag, or tell the user
-why (e.g. a photo warning). The bundled [`vectorize` skill](skills/vectorize/SKILL.md)
+why (e.g. a photo warning). The bundled [`vectorize` skill](https://github.com/realproject7/svgsmith/blob/main/skills/vectorize/SKILL.md)
 encodes this exact mapping and the accept/retry logic.
 
 ### Rasterize (SVG → PNG)
@@ -213,8 +213,8 @@ svgsmith doesn't trust a single trace. After producing an SVG it:
 
 That closed loop is what lets an agent run svgsmith unsupervised: it gets a converged
 result and a confidence number, not a guess. For an end-to-end agent wrapper, see the
-[`vectorize` skill](skills/vectorize/SKILL.md).
+[`vectorize` skill](https://github.com/realproject7/svgsmith/blob/main/skills/vectorize/SKILL.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/realproject7/svgsmith/blob/main/LICENSE).
