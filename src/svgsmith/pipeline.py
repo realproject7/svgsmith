@@ -34,6 +34,58 @@ DETAIL_LEVELS = {
     "clean": (0.10, 48, 18.0),  # tidied: edge-preserving cleanup, noise reduced
     "poster": (0.13, 28, 30.0),  # bold flat graphic: few colors, strong flattening
 }
+# Pre-trace supersampling target (#60) and per-detail fixed-K palette size (#41)
+# for color mode. Upscaling smooths contours; the small k-means palette + black
+# anchor snaps each region to one clean color and keeps the outline pure black.
+# K scales with detail so a genuinely rich illustration is not crushed at "high".
+_TRACE_RESOLUTION = 2048
+# Only low-resolution color inputs get the supersample + k-means treatment;
+# already-large clean art traces smoothly on the proven path and upscaling it
+# just bloats node count (a 1024px PNG shiba regresses 95→219 paths if upscaled).
+# Gate for the supersample + fixed-K palette path. It targets exactly one class:
+# low-resolution, raster-degraded FLAT cartoon/illustration art (a 640px JPEG
+# cartoon). Three signals keep it off everything else:
+#   * resolution  — already-large art traces smoothly; upscaling only bloats it.
+#   * distinct colors — synthetic/clean flats (a handful of exact colors) have
+#     nothing to consolidate; only JPEG/anti-aliased art (thousands) does.
+#   * edge density (native) — bounded BOTH ways: a smooth gradient/photo has
+#     almost no hard edges (below the floor), a hatched/sketch drawing has edges
+#     everywhere and explodes when upscaled (above the ceiling); a flat cartoon's
+#     bold outlines sit in between.
+_SUPERSAMPLE_BELOW = 1024
+_MIN_DISTINCT_COLORS = 256
+_MIN_EDGE_DENSITY = 0.02
+_MAX_EDGE_DENSITY = 0.12
+DETAIL_KMEANS_K = {"high": 14, "normal": 11, "clean": 9, "poster": 6}
+# A genuinely flat cartoon supersamples to a low path count (the pigeon ~380). If
+# the supersampled trace blows past this, the input was NOT flat (a textured/photo
+# input that slipped through the cheap gate) — fall back to the baseline path so a
+# misclassification costs one extra trace, never a bloated SVG.
+_SUPERSAMPLE_MAX_PATHS = 1200
+
+
+def _supersample_candidate(image: ImageInput) -> bool:
+    """Whether ``image`` is the low-res, degraded, flat-cartoon class (see above).
+
+    This is a cheap PRE-filter; it can still admit a textured/photo input whose
+    edge density happens to land in the band. ``convert`` therefore caps the result:
+    if the supersampled trace is not actually flat (too many paths) it falls back to
+    the baseline, so a misclassification costs an extra trace, never a bloated SVG.
+    """
+    rgb = load_image(image, "RGB")
+    if max(rgb.size) >= _SUPERSAMPLE_BELOW:
+        return False
+    # getcolors early-exits at the cap (None iff > _MIN_DISTINCT_COLORS colors), far
+    # cheaper than np.unique over every pixel on the common color-convert path.
+    if rgb.getcolors(maxcolors=_MIN_DISTINCT_COLORS) is not None:
+        return False  # synthetic / already-clean flat: nothing to consolidate
+    # Edge density is a fraction of all pixels, so it scales ~1/linear-dimension;
+    # the band is calibrated for the ~640px low-res target this gate applies to.
+    from scipy.ndimage import sobel
+
+    gray = np.asarray(rgb.convert("L"), dtype=float)
+    edge_density = float((np.hypot(sobel(gray, 0), sobel(gray, 1)) > 64).mean())
+    return _MIN_EDGE_DENSITY < edge_density < _MAX_EDGE_DENSITY
 # Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
 # output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
 _SMOOTH_SSIM_TOLERANCE = 0.06
@@ -131,45 +183,67 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
 
     classification = _resolve_classification(image, opts.mode)
     flatten_sigma, palette_size, palette_threshold = DETAIL_LEVELS[opts.detail]
-    pre_opts = _preprocess_opts(classification.mode)
-    if classification.mode == "color":
-        pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
-    if opts.uniform_outline and classification.mode == "color":
-        pre_opts = replace(pre_opts, uniform_outline=True)
-    # Flatten soft/glossy shading before tracing so smooth gradients collapse into
-    # clean flat regions instead of shattering into scratch facets (opt-in; trades
-    # fine shading for a cleaner graphic look).
-    if opts.flatten_shading and classification.mode == "color":
-        pre_opts = replace(pre_opts, flatten=True, flatten_sigma=0.18, flatten_spatial=8)
-    # --solid-background is the auto case of --background; an explicit color (other
-    # than "auto") repaints the detected background to that exact color.
-    if opts.solid_background or opts.background is not None:
-        target = None if opts.background in (None, "auto") else opts.background
-        pre_opts = replace(pre_opts, solid_background=True, background_color=target)
-    prepared = preprocess(image, pre_opts)
+    is_color = classification.mode == "color"
 
-    svg, result = run_loop(
-        prepared,
-        classification,
-        quality=opts.quality,
-        max_iters=opts.max_iters,
-        editable=opts.editable,
-        reference=image,  # score against the true original, not the preprocessed image
-        palette_threshold=palette_threshold if classification.mode == "color" else None,
-    )
+    def resolve_pre_opts(use_supersample: bool) -> PreprocessOptions:
+        """Preprocess options for this convert, with or without the supersample path.
 
-    # Curve-refit color output so contours are smooth (the verify loop traces
-    # quantized pixel edges, which wobble). Re-score the smoothed result and keep
-    # it only if it does not materially hurt fidelity — smoothing legitimately
-    # lowers SSIM a little (SSIM penalizes the small shape change), but a large
-    # drop means it destroyed a feature, so we fall back to the un-smoothed SVG.
-    similarity = result.best_score
-    if opts.smooth and opts.editable and classification.mode == "color":
-        reference = load_image(image, "RGB")
-        smoothed = smooth_svg(svg)
-        smoothed_score = score(reference, rasterize(smoothed, reference.size))
-        if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
-            svg, similarity = smoothed, smoothed_score
+        Low-resolution, FLAT color inputs (a 640px JPEG cartoon) trace staircased,
+        near-duplicate-colored contours; supersampling + a small fixed-K k-means
+        palette with a black/outline anchor fixes that. Everything else uses the
+        proven median-cut + perceptual-LAB-merge path. The opt-in flags
+        (--flatten-shading, --solid-background, --uniform-outline) apply to both.
+        """
+        pre = _preprocess_opts(classification.mode)
+        if is_color and use_supersample:
+            pre = replace(
+                pre,
+                flatten=False,
+                trace_resolution=_TRACE_RESOLUTION,
+                kmeans_palette=True,
+                palette_k=DETAIL_KMEANS_K[opts.detail],
+            )
+        elif is_color:
+            pre = replace(pre, flatten_sigma=flatten_sigma, palette_size=palette_size)
+        if opts.uniform_outline and is_color:
+            pre = replace(pre, uniform_outline=True)
+        if opts.flatten_shading and is_color:
+            pre = replace(pre, flatten=True, flatten_sigma=0.18, flatten_spatial=8)
+        if opts.solid_background or opts.background is not None:
+            target = None if opts.background in (None, "auto") else opts.background
+            pre = replace(pre, solid_background=True, background_color=target)
+        return pre
+
+    def render(pre: PreprocessOptions) -> tuple[str, float, int]:
+        """Trace + verify-loop + smooth for one preprocess config -> (svg, score, iters)."""
+        svg, result = run_loop(
+            preprocess(image, pre),
+            classification,
+            quality=opts.quality,
+            max_iters=opts.max_iters,
+            editable=opts.editable,
+            reference=image,  # score against the true original, not the preprocessed image
+            palette_threshold=palette_threshold if is_color else None,
+        )
+        # Curve-refit color output so contours are smooth (the verify loop traces
+        # quantized pixel edges, which wobble). Keep the smoothed result only if it
+        # does not materially hurt fidelity — smoothing lowers SSIM a little by
+        # design, but a large drop means it destroyed a feature.
+        similarity = result.best_score
+        if opts.smooth and opts.editable and is_color:
+            reference = load_image(image, "RGB")
+            smoothed = smooth_svg(svg)
+            smoothed_score = score(reference, rasterize(smoothed, reference.size))
+            if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
+                svg, similarity = smoothed, smoothed_score
+        return svg, similarity, result.iterations
+
+    supersampled = is_color and _supersample_candidate(image)
+    svg, similarity, iterations = render(resolve_pre_opts(supersampled))
+    # Output-complexity guard: a real flat cartoon supersamples to few paths. If the
+    # trace exploded, the gate admitted a non-flat input — fall back to the baseline.
+    if supersampled and svg.count("<path") > _SUPERSAMPLE_MAX_PATHS:
+        svg, similarity, iterations = render(resolve_pre_opts(False))
 
     # Transparent background: trace/verify ran normally (with the background), so
     # the loop is unaffected; here we cut the edge-connected background paths from
@@ -188,7 +262,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         mode_used=classification.mode,
         engine=_ENGINE[classification.mode],
         preset=classification.preset,
-        iterations=result.iterations,
+        iterations=iterations,
         similarity=similarity,
         passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),

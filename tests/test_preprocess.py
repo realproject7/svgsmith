@@ -10,9 +10,11 @@ from svgsmith.preprocess import (
     PreprocessOptions,
     preprocess,
     quantize_colors,
+    quantize_kmeans,
     remove_background,
     solid_background,
     upscale_tiny,
+    upscale_to,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -88,6 +90,35 @@ def test_upscale_only_below_min_dimension():
 
     big = Image.open(FLAT_BG)  # 128x128, already large enough
     assert upscale_tiny(big, min_dimension=64).size == big.size
+
+
+def test_upscale_to_reaches_target_and_is_capped():
+    # Reaches the target long-edge for a normal low-res input.
+    assert max(upscale_to(Image.new("RGB", (640, 640)), 2048).size) == 2048
+    # Capped at max_factor so a tiny input is not blown up to a huge trace.
+    assert max(upscale_to(Image.new("RGB", (100, 100)), 2048, max_factor=4.0).size) == 400
+    # No-op when already at/above the target.
+    assert upscale_to(Image.new("RGB", (2048, 2048)), 2048).size == (2048, 2048)
+
+
+def test_quantize_kmeans_cuts_colors_and_anchors_black():
+    # A many-color gradient with a bold black band (a stand-in outline).
+    grad = np.tile(np.linspace(0, 255, 200, dtype=np.uint8), (200, 1))
+    arr = np.stack([grad, np.full((200, 200), 120, np.uint8), 255 - grad], axis=2)
+    arr[90:110, :] = (0, 0, 0)
+    out = quantize_kmeans(Image.fromarray(arr, "RGB"), k=5)
+    colors = np.unique(np.asarray(out.convert("RGB")).reshape(-1, 3), axis=0)
+    assert len(colors) <= 6  # k clusters + the pure-black anchor
+    assert any((c == 0).all() for c in colors)  # the outline stays pure #000000
+
+
+def test_quantize_kmeans_skips_anchor_when_mostly_dark():
+    # A near-black image: the anchor must NOT fire, or everything collapses to one
+    # black fill; k-means keeps the dark tones distinct instead.
+    arr = np.random.default_rng(0).integers(0, 40, (64, 64, 3), dtype=np.uint8)
+    out = quantize_kmeans(Image.fromarray(arr, "RGB"), k=4)
+    colors = np.unique(np.asarray(out.convert("RGB")).reshape(-1, 3), axis=0)
+    assert len(colors) > 1
 
 
 def test_steps_are_individually_toggleable():

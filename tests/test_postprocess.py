@@ -137,3 +137,47 @@ def test_consolidation_can_be_disabled():
     )
     out = postprocess(svg, PostprocessOptions(consolidate_palette=False, simplify_level=0))
     assert len(_fill_colors(out)) == 2
+
+
+def test_merge_fill_runs_collapses_consecutive_translate_paths():
+    # Two consecutive same-fill translate-only paths collapse into ONE <path>
+    # (subpaths combined, translate baked in); a different fill stays separate.
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 10 10">'
+        '<path fill="#ff0000" transform="translate(1,1)" d="M0 0 L2 0 L2 2 Z"/>'
+        '<path fill="#ff0000" transform="translate(3,3)" d="M0 0 L1 0 L1 1 Z"/>'
+        '<path fill="#0000ff" d="M5 5 L6 5 L6 6 Z"/>'
+        "</svg>"
+    )
+    root = ET.fromstring(postprocess(svg))
+    reds = [g for g in root if g.get("fill") == "#ff0000"]
+    assert len(reds) == 1
+    assert len(reds[0]) == 1  # one merged path, not two
+    assert reds[0][0].get("d").count("M") == 2  # both shapes' subpaths kept
+    assert reds[0][0].get("transform") is None  # translate baked into geometry
+
+
+def test_merge_fill_runs_skips_scaled_paths():
+    # Scale (Potrace/binary) transforms must NOT be baked — those paths stay
+    # separate so the scale is preserved rather than silently dropped.
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 10 10">'
+        '<path fill="#ff0000" transform="scale(2)" d="M0 0 L1 0 L1 1 Z"/>'
+        '<path fill="#ff0000" transform="scale(2)" d="M2 2 L3 2 L3 3 Z"/>'
+        "</svg>"
+    )
+    reds = [g for g in ET.fromstring(postprocess(svg)) if g.get("fill") == "#ff0000"]
+    assert len(reds[0]) == 2  # not merged
+    assert all(p.get("transform") == "scale(2)" for p in reds[0])
+
+
+def test_merge_fill_runs_can_be_disabled():
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 10 10">'
+        '<path fill="#ff0000" transform="translate(1,1)" d="M0 0 L2 0 L2 2 Z"/>'
+        '<path fill="#ff0000" transform="translate(3,3)" d="M0 0 L1 0 L1 1 Z"/>'
+        "</svg>"
+    )
+    out = postprocess(svg, PostprocessOptions(merge_fill_runs=False))
+    reds = [g for g in ET.fromstring(out) if g.get("fill") == "#ff0000"]
+    assert len(reds[0]) == 2  # left as separate paths
