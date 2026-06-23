@@ -542,6 +542,54 @@ def _baked_subpaths(path: dict) -> list[_Subpath]:
     return baked
 
 
+def _path_bbox(path: dict, samples: int = 3) -> tuple[float, float, float, float] | None:
+    """Bounding box of a path in final (translate-baked) coordinates."""
+    pts = [pt for sub in _baked_subpaths(path) for pt in _subpath_points(sub, samples)]
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _snap_canvas_background(
+    paths: list[dict], width: float, height: float, coverage: float
+) -> None:
+    """Replace a near-full-canvas bottom path with a clean canvas rectangle.
+
+    The bottom path in a stacked trace is the background; the tracer draws its outer
+    edge as a wobbly contour that overshoots the canvas (jagged corners / a stray
+    border fringe). When it covers at least ``coverage`` of the canvas, rewrite it
+    as the exact rectangle so the visible border is crisp — everything else paints
+    on top, so the fill is unchanged where the subject covers it.
+    """
+    if not paths or not (width and height):
+        return
+    box = _path_bbox(paths[0])
+    if box is None or (box[2] - box[0]) * (box[3] - box[1]) < coverage * width * height:
+        return
+    w = _format_number(width, 2)
+    h = _format_number(height, 2)
+    paths[0]["d"] = f"M0 0L{w} 0L{w} {h}L0 {h}Z"
+    paths[0]["transform"] = ""
+
+
+def snap_background_layer(svg_str: str, coverage: float = 0.9) -> str:
+    """Rewrite a near-full-canvas background path as a clean canvas rectangle.
+
+    Color-mode polish for a crisp square border: the tracer draws the background as
+    a wobbly contour that overshoots the canvas (jagged corners / a stray fringe).
+    This rewrites the bottom (background) path as the exact rectangle; everything
+    else paints on top, so the visible fill is unchanged where the subject covers
+    it. A no-op when no path covers ``coverage`` of the canvas (e.g. line art).
+    """
+    root = ET.fromstring(svg_str)
+    width, height = _geometry_size(root)
+    paths = _collect_paths(root)
+    _snap_canvas_background(paths, width, height, coverage)
+    return _build_svg(root, paths, True)
+
+
 def _build_svg(
     source: ET.Element,
     paths: list[dict],

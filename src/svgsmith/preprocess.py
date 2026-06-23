@@ -47,6 +47,9 @@ class PreprocessOptions:
     kmeans_palette: bool = False
     palette_k: int = 9  # target color count for the k-means quantizer
     black_anchor_luma: int = 45  # pixels darker than this snap to pure #000000
+    detect_linework: bool = False  # also snap dark thin lines/creases to black (black-hat)
+    linework_radius: int = 9  # black-hat structuring-element size (px, at trace resolution)
+    linework_threshold: float = 28.0  # min black-hat response to count as a dark line
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
@@ -110,11 +113,30 @@ def _assign_nearest(pixels: np.ndarray, centroids: np.ndarray) -> np.ndarray:
     return best_idx
 
 
+def _linework_mask(luma2d: np.ndarray, radius: int, threshold: float) -> np.ndarray:
+    """Boolean mask of dark, thin line structures (outlines, internal creases).
+
+    Black-hat = morphological closing minus the image, which highlights dark
+    features narrower than the structuring element while leaving large dark regions
+    (a slate head) untouched. This separates a feather-crease *line* — dark, thin,
+    surrounded by a lighter color — from a dark *region*, so the linework can be
+    snapped to one clean black outline layer instead of bleeding into dark-tint
+    fills the way a plain color trace does.
+    """
+    from scipy.ndimage import grey_closing
+
+    blackhat = grey_closing(luma2d, size=(radius, radius)) - luma2d
+    return blackhat > threshold
+
+
 def quantize_kmeans(
     img: Image.Image,
     k: int,
     black_anchor_luma: int = 45,
     *,
+    detect_linework: bool = False,
+    linework_radius: int = 9,
+    linework_threshold: float = 28.0,
     seed: int = 7,
     iters: int = 12,
     sample: int = 60000,
@@ -124,11 +146,13 @@ def quantize_kmeans(
     Pixels darker than ``black_anchor_luma`` (luma) are forced to pure ``#000000``
     and **excluded** from clustering, so the line-art outline collapses to one
     clean pure-black layer and small accent colors (a red beak, a pink highlight)
-    are not absorbed into a muddy dark cluster. The remaining pixels are clustered
-    to ``k`` centroids (k-means++ seeding on a random sample, then Lloyd
-    iterations) and every pixel is snapped to its centroid. The anchor is skipped
-    when near-black pixels dominate the image (a genuinely dark picture, not an
-    outline), so dark art is not crushed to black.
+    are not absorbed into a muddy dark cluster. With ``detect_linework`` the anchor
+    also captures dark *thin* structures (outlines and internal feather creases)
+    via a black-hat transform, so they become clean black lines instead of
+    dark-tint fills. The remaining pixels are clustered to ``k`` centroids
+    (k-means++ seeding on a random sample, then Lloyd iterations) and every pixel
+    is snapped to its centroid. The anchor is skipped when the black mask dominates
+    the image (a genuinely dark picture, not an outline), so dark art is not crushed.
 
     Dithering is never introduced and the alpha channel, if any, is preserved.
     """
@@ -138,6 +162,9 @@ def quantize_kmeans(
     flat = rgba[:, :, :3].astype(np.float32).reshape(-1, 3)
     luma = flat @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
     black = luma < black_anchor_luma
+    if detect_linework:
+        ink = _linework_mask(luma.reshape(height, width), linework_radius, linework_threshold)
+        black = black | ink.reshape(-1)
     # Only treat near-black as a separate outline layer when it is a minority of
     # the image; on a mostly-dark picture, cluster it like any other color.
     black_fraction = float(black.mean())
@@ -387,7 +414,14 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
         img = upscale_to(img, opts.trace_resolution)
     if opts.quantize:
         if opts.kmeans_palette:
-            img = quantize_kmeans(img, opts.palette_k, opts.black_anchor_luma)
+            img = quantize_kmeans(
+                img,
+                opts.palette_k,
+                opts.black_anchor_luma,
+                detect_linework=opts.detect_linework,
+                linework_radius=opts.linework_radius,
+                linework_threshold=opts.linework_threshold,
+            )
         else:
             img = quantize_colors(img, opts.palette_size)
     if opts.uniform_outline:

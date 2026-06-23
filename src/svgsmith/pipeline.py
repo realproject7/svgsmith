@@ -14,7 +14,7 @@ import numpy as np
 
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
-from svgsmith.postprocess import drop_background_paths
+from svgsmith.postprocess import drop_background_paths, snap_background_layer
 from svgsmith.preprocess import PreprocessOptions, _edge_flood_fill_mask, preprocess
 from svgsmith.report import Report, svg_stats
 from svgsmith.smooth import smooth_svg
@@ -56,7 +56,10 @@ _SUPERSAMPLE_BELOW = 1024
 _MIN_DISTINCT_COLORS = 256
 _MIN_EDGE_DENSITY = 0.02
 _MAX_EDGE_DENSITY = 0.12
-DETAIL_KMEANS_K = {"high": 14, "normal": 11, "clean": 9, "poster": 6}
+# Outline isolation (black-hat) pulls the dark linework out of the fills, so fewer
+# clusters are needed for the actual colors — a tighter palette closer to the
+# artist's true few flats (PerfectVector lands ~8 on the pigeon).
+DETAIL_KMEANS_K = {"high": 10, "normal": 8, "clean": 7, "poster": 5}
 # A genuinely flat cartoon supersamples to a low path count (the pigeon ~380). If
 # the supersampled trace blows past this, the input was NOT flat (a textured/photo
 # input that slipped through the cheap gate) — fall back to the baseline path so a
@@ -202,6 +205,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                 trace_resolution=_TRACE_RESOLUTION,
                 kmeans_palette=True,
                 palette_k=DETAIL_KMEANS_K[opts.detail],
+                detect_linework=True,
             )
         elif is_color:
             pre = replace(pre, flatten_sigma=flatten_sigma, palette_size=palette_size)
@@ -250,11 +254,17 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     # the final SVG using a region mask (subjects sharing the bg colour are kept).
     # Color mode only — its paths live in viewBox space; binary/pixel line-art is
     # already foreground-only, so there is no background layer to remove.
-    if opts.transparent_background and classification.mode == "color":
+    if opts.transparent_background and is_color:
         bg_mask = _edge_flood_fill_mask(
             np.array(load_image(input_path, "RGBA")), _DEFAULT_BG_TOLERANCE
         )
         svg = drop_background_paths(svg, bg_mask)
+    elif is_color and opts.editable:
+        # Snap a wobbly full-canvas background to a crisp rectangle (no-op when the
+        # image has no dominant solid background). Skipped when the background was
+        # just removed above, and for --no-editable (which returns the raw trace).
+        # Color mode only — line art has no background layer.
+        svg = snap_background_layer(svg)
 
     output = _output_path(input_path, opts.out)
     report = Report(
