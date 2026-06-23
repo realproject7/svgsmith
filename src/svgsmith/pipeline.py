@@ -34,6 +34,44 @@ DETAIL_LEVELS = {
     "clean": (0.10, 48, 18.0),  # tidied: edge-preserving cleanup, noise reduced
     "poster": (0.13, 28, 30.0),  # bold flat graphic: few colors, strong flattening
 }
+# Pre-trace supersampling target (#60) and per-detail fixed-K palette size (#41)
+# for color mode. Upscaling smooths contours; the small k-means palette + black
+# anchor snaps each region to one clean color and keeps the outline pure black.
+# K scales with detail so a genuinely rich illustration is not crushed at "high".
+_TRACE_RESOLUTION = 2048
+# Only low-resolution color inputs get the supersample + k-means treatment;
+# already-large clean art traces smoothly on the proven path and upscaling it
+# just bloats node count (a 1024px PNG shiba regresses 95→219 paths if upscaled).
+# Gate for the supersample + fixed-K palette path. It targets exactly one class:
+# low-resolution, raster-degraded FLAT cartoon/illustration art (a 640px JPEG
+# cartoon). Three signals keep it off everything else:
+#   * resolution  — already-large art traces smoothly; upscaling only bloats it.
+#   * distinct colors — synthetic/clean flats (a handful of exact colors) have
+#     nothing to consolidate; only JPEG/anti-aliased art (thousands) does.
+#   * edge density (native) — bounded BOTH ways: a smooth gradient/photo has
+#     almost no hard edges (below the floor), a hatched/sketch drawing has edges
+#     everywhere and explodes when upscaled (above the ceiling); a flat cartoon's
+#     bold outlines sit in between.
+_SUPERSAMPLE_BELOW = 1024
+_MIN_DISTINCT_COLORS = 256
+_MIN_EDGE_DENSITY = 0.02
+_MAX_EDGE_DENSITY = 0.12
+DETAIL_KMEANS_K = {"high": 14, "normal": 11, "clean": 9, "poster": 6}
+
+
+def _supersample_candidate(image: ImageInput) -> bool:
+    """Whether ``image`` is the low-res, degraded, flat-cartoon class (see above)."""
+    from scipy.ndimage import sobel
+
+    rgb = load_image(image, "RGB")
+    if max(rgb.size) >= _SUPERSAMPLE_BELOW:
+        return False
+    pixels = np.asarray(rgb).reshape(-1, 3)
+    if len(np.unique(pixels, axis=0)) <= _MIN_DISTINCT_COLORS:
+        return False  # synthetic / already-clean flat: nothing to consolidate
+    gray = np.asarray(rgb.convert("L"), dtype=float)
+    edge_density = float((np.hypot(sobel(gray, 0), sobel(gray, 1)) > 64).mean())
+    return _MIN_EDGE_DENSITY < edge_density < _MAX_EDGE_DENSITY
 # Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
 # output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
 _SMOOTH_SSIM_TOLERANCE = 0.06
@@ -133,7 +171,23 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     flatten_sigma, palette_size, palette_threshold = DETAIL_LEVELS[opts.detail]
     pre_opts = _preprocess_opts(classification.mode)
     if classification.mode == "color":
-        pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
+        # Low-resolution, FLAT inputs (e.g. a 640px JPEG cartoon) trace staircased,
+        # near-duplicate-colored contours. Supersample them and snap to a small
+        # fixed-K palette with a black/outline anchor — k-means is the consolidation,
+        # so the bilateral flatten is off (unless --flatten-shading re-enables it).
+        # Already-large or hatched/textured inputs stay on the proven median-cut +
+        # perceptual-LAB-merge path: upscaling a large clean image only bloats node
+        # count, and upscaling a hatched sketch explodes it (see _edge_density).
+        if _supersample_candidate(image):
+            pre_opts = replace(
+                pre_opts,
+                flatten=False,
+                trace_resolution=_TRACE_RESOLUTION,
+                kmeans_palette=True,
+                palette_k=DETAIL_KMEANS_K[opts.detail],
+            )
+        else:
+            pre_opts = replace(pre_opts, flatten_sigma=flatten_sigma, palette_size=palette_size)
     if opts.uniform_outline and classification.mode == "color":
         pre_opts = replace(pre_opts, uniform_outline=True)
     # Flatten soft/glossy shading before tracing so smooth gradients collapse into

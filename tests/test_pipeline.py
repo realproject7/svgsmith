@@ -202,6 +202,55 @@ def test_background_invalid_color_is_rejected():
         ConvertOptions(background="not-a-color")
 
 
+def _gradient_with_black_bars(size: int = 300):
+    """Low-res flat cartoon stand-in: a many-color gradient (so there is something
+    to consolidate) crossed by bold black bars (hard outline edges)."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    grad = np.tile(np.linspace(0, 255, size, dtype=np.uint8), (size, 1))
+    arr = np.stack([grad, np.full((size, size), 120, np.uint8), 255 - grad], axis=2)
+    img = Image.fromarray(arr, "RGB")
+    draw = ImageDraw.Draw(img)
+    for i in range(4):
+        draw.rectangle([20 + i * 70, 40, 50 + i * 70, size - 40], fill=(0, 0, 0))
+    return img
+
+
+def test_supersample_gate_targets_low_res_flat_cartoons_only():
+    """The supersample + k-means path triggers only for low-res, raster-degraded
+    flat cartoon art — never large, synthetic-flat, gradient, or hatched inputs."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from svgsmith.pipeline import _supersample_candidate
+
+    assert _supersample_candidate(_gradient_with_black_bars()) is True
+    # Already-large art (resolution gate).
+    assert _supersample_candidate(Image.new("RGB", (1100, 1100), (200, 50, 50))) is False
+    # Synthetic clean flat: a handful of exact colors, nothing to consolidate.
+    flat = Image.new("RGB", (200, 200), (0, 0, 0))
+    ImageDraw.Draw(flat).rectangle([0, 0, 100, 200], fill=(200, 30, 30))
+    assert _supersample_candidate(flat) is False
+    # Smooth gradient / photo: many colors but no hard edges.
+    gx = np.tile(np.linspace(0, 255, 200, dtype=np.uint8), (200, 1))
+    gradient = Image.fromarray(np.stack([gx, gx, 255 - gx], axis=2), "RGB")
+    assert _supersample_candidate(gradient) is False
+
+
+def test_low_res_flat_cartoon_is_supersampled(tmp_path):
+    """End to end: a triggering low-res input is traced at a larger internal
+    resolution, so the output viewBox exceeds the native size."""
+    src = tmp_path / "cartoon.png"
+    _gradient_with_black_bars().save(src)
+    svg, report = convert(str(src), ConvertOptions(max_iters=1))
+    root = ET.fromstring(svg)
+    view_box = root.get("viewBox")
+    assert view_box is not None
+    assert max(float(v) for v in view_box.split()) > 300  # upscaled past native 300px
+    assert report.mode_used == "color"
+
+
 def test_detail_level_validation_and_spectrum():
     import pytest
 
