@@ -376,12 +376,15 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
         img = solid_background(img, opts.background_tolerance, opts.background_color)
     if opts.upscale:
         img = upscale_tiny(img, opts.min_dimension)
-    if opts.trace_resolution:
-        img = upscale_to(img, opts.trace_resolution)
     if opts.denoise:
         img = denoise(img, opts.median_size)
     if opts.flatten:
         img = flatten_colors(img, opts.flatten_sigma, opts.flatten_spatial)
+    # Supersample AFTER denoise/flatten: the bilateral filter is O(pixels) and must
+    # run on the native grid (running it on the 2048 upscale is ~70x slower for no
+    # benefit), then quantize on the upscaled image so vtracer traces a clean grid.
+    if opts.trace_resolution:
+        img = upscale_to(img, opts.trace_resolution)
     if opts.quantize:
         if opts.kmeans_palette:
             img = quantize_kmeans(img, opts.palette_k, opts.black_anchor_luma)

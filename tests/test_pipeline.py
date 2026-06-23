@@ -232,10 +232,34 @@ def test_supersample_gate_targets_low_res_flat_cartoons_only():
     flat = Image.new("RGB", (200, 200), (0, 0, 0))
     ImageDraw.Draw(flat).rectangle([0, 0, 100, 200], fill=(200, 30, 30))
     assert _supersample_candidate(flat) is False
-    # Smooth gradient / photo: many colors but no hard edges.
+    # Smooth gradient / photo: many colors but no hard edges (below the floor).
     gx = np.tile(np.linspace(0, 255, 200, dtype=np.uint8), (200, 1))
     gradient = Image.fromarray(np.stack([gx, gx, 255 - gx], axis=2), "RGB")
     assert _supersample_candidate(gradient) is False
+    # Hatched / textured: many colours AND edges everywhere — excluded by the
+    # edge-density CEILING (upscaling it would explode the trace).
+    noise = np.random.default_rng(0).integers(0, 256, (200, 200, 3), dtype=np.uint8)
+    assert _supersample_candidate(Image.fromarray(noise, "RGB")) is False
+
+
+def test_supersample_falls_back_when_the_trace_explodes(monkeypatch, tmp_path):
+    """If a non-flat input slips past the cheap gate, the output-complexity guard
+    trips and convert falls back to the baseline path — never a bloated SVG."""
+    import svgsmith.pipeline as pipeline_module
+
+    src = tmp_path / "cartoon.png"
+    _gradient_with_black_bars().save(src)
+
+    # Baseline: gate forced off, so the standard median-cut path runs.
+    monkeypatch.setattr(pipeline_module, "_supersample_candidate", lambda image: False)
+    baseline_paths = convert(str(src), ConvertOptions(max_iters=1))[1].svg.paths
+
+    # Gate forced on but the path cap set to 0, so the supersampled trace always
+    # trips the guard and convert must fall back to exactly the baseline result.
+    monkeypatch.setattr(pipeline_module, "_supersample_candidate", lambda image: True)
+    monkeypatch.setattr(pipeline_module, "_SUPERSAMPLE_MAX_PATHS", 0)
+    fellback_paths = convert(str(src), ConvertOptions(max_iters=1))[1].svg.paths
+    assert fellback_paths == baseline_paths
 
 
 def test_low_res_flat_cartoon_is_supersampled(tmp_path):
