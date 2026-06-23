@@ -181,3 +181,35 @@ def test_merge_fill_runs_can_be_disabled():
     out = postprocess(svg, PostprocessOptions(merge_fill_runs=False))
     reds = [g for g in ET.fromstring(out) if g.get("fill") == "#ff0000"]
     assert len(reds[0]) == 2  # left as separate paths
+
+
+def _all_path_ds(svg: str) -> list[str]:
+    return [p.get("d") for p in ET.fromstring(svg).iter(f"{{{SVG_NS}}}path")]
+
+
+def test_snap_background_layer_rewrites_full_canvas_path_as_rect():
+    from svgsmith.postprocess import snap_background_layer
+
+    # A wobbly near-full-canvas background path (overshoots the canvas) under a
+    # small foreground shape. The background becomes the exact canvas rectangle.
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 100 100">'
+        '<path fill="#eeee00" d="M-2 -2 L101 0 L100 102 L1 100 Z"/>'
+        '<path fill="#ff0000" d="M40 40 L60 40 L60 60 Z"/>'
+        "</svg>"
+    )
+    ds = _all_path_ds(snap_background_layer(svg))
+    assert ds[0] == "M0 0L100 0L100 100L0 100Z"  # bottom path snapped to the rect
+
+
+def test_snap_background_layer_is_noop_without_a_full_canvas_background():
+    from svgsmith.postprocess import snap_background_layer
+
+    # Line-art / no dominant background: nothing covers the canvas, so no snap.
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 100 100">'
+        '<path fill="#ff0000" d="M10 10 L20 10 L20 20 Z"/>'
+        "</svg>"
+    )
+    ds = _all_path_ds(snap_background_layer(svg))
+    assert all(not d.startswith("M0 0L100 0") for d in ds)

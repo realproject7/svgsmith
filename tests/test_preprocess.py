@@ -121,6 +121,24 @@ def test_quantize_kmeans_skips_anchor_when_mostly_dark():
     assert len(colors) > 1
 
 
+def _black_fraction(img: Image.Image) -> float:
+    arr = np.asarray(img.convert("RGB")).reshape(-1, 3)
+    return float((arr.sum(axis=1) < 30).mean())
+
+
+def test_quantize_kmeans_linework_snaps_dark_thin_lines_to_black():
+    # A green field crossed by a thin DARK line whose luma is above the near-black
+    # anchor (so only the black-hat linework pass can catch it). detect_linework
+    # turns the line into clean black; without it the line stays a dark-green fill.
+    arr = np.full((120, 120, 3), (40, 165, 70), dtype=np.uint8)  # green, luma ~120
+    arr[:, 57:63] = (55, 90, 55)  # thin darker-green line, luma ~80 (> anchor 45)
+    img = Image.fromarray(arr, "RGB")
+    plain = quantize_kmeans(img, k=4, detect_linework=False)
+    inked = quantize_kmeans(img, k=4, detect_linework=True)
+    assert _black_fraction(inked) > _black_fraction(plain)
+    assert _black_fraction(plain) == 0.0  # the line is above the near-black anchor
+
+
 def test_steps_are_individually_toggleable():
     original = Image.open(NOISY)
     # With every step disabled, only the RGBA normalization is applied.
