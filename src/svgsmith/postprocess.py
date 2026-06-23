@@ -36,6 +36,10 @@ class PostprocessOptions:
     group: bool = True
     precision: int = 2  # output coordinate decimals
     epsilon_ratio: float = 0.0015  # DP epsilon = level * diagonal * ratio
+    # Merge each consecutive same-fill run into ONE <path> (subpaths combined, per-
+    # path translate baked in). Pixel-identical (same geometry, fill, z-position)
+    # but far fewer path elements — a stacked tracer emits one path per region (#42).
+    merge_fill_runs: bool = True
 
 
 # A segment keeps its curve type so simplification can preserve curves:
@@ -478,7 +482,7 @@ def postprocess(svg_str: str, opts: PostprocessOptions | None = None) -> str:
             if new_d:
                 path["d"] = new_d
 
-    return _build_svg(source, paths, opts.group)
+    return _build_svg(source, paths, opts.group, opts.precision, opts.merge_fill_runs)
 
 
 def _length(value: str | None) -> float:
@@ -504,7 +508,47 @@ def _geometry_size(root: ET.Element) -> tuple[float, float]:
     return _length(root.get("width")), _length(root.get("height"))
 
 
-def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
+_NON_TRANSLATE_RE = re.compile(r"\b(?:scale|matrix|rotate|skewX|skewY)\s*\(")
+
+
+def _is_translate_only(transform: str) -> bool:
+    """True when a transform is empty or composed solely of ``translate()``.
+
+    Color/pixel (VTracer) paths carry only ``translate``; binary (Potrace) paths
+    carry ``scale``/flip. Run-merging bakes translate into the geometry, so it must
+    only fire when every member is translate-only — otherwise a scaled path's
+    coordinates would be baked without the scale and the shape would break.
+    """
+    return not _NON_TRANSLATE_RE.search(transform or "")
+
+
+def _shift(point: Point, tx: float, ty: float) -> Point:
+    return (point[0] + tx, point[1] + ty)
+
+
+def _baked_subpaths(path: dict) -> list[_Subpath]:
+    """Subpaths of ``path`` with its ``translate`` baked into the coordinates."""
+    tx, ty = _translate_of(path["transform"])
+    baked: list[_Subpath] = []
+    for sub in parse_path(path["d"]):
+        segments: list[Segment] = []
+        for seg in sub.segments:
+            kind = seg[0]
+            if kind in ("C", "Q"):
+                segments.append((kind, *(_shift(p, tx, ty) for p in seg[1:])))
+            else:
+                segments.append((kind, _shift(seg[-1], tx, ty)))
+        baked.append(_Subpath(_shift(sub.start, tx, ty), segments, sub.closed))
+    return baked
+
+
+def _build_svg(
+    source: ET.Element,
+    paths: list[dict],
+    group: bool,
+    precision: int = 2,
+    merge_fill_runs: bool = True,
+) -> str:
     ET.register_namespace("", SVG_NS)
     svg = ET.Element(f"{{{SVG_NS}}}svg", {"version": source.get("version", "1.1")})
     # Emit a responsive, scalable root. The tracer outputs a fixed pixel width/height
@@ -541,6 +585,19 @@ def _build_svg(source: ET.Element, paths: list[dict], group: bool) -> str:
             layer = ET.SubElement(
                 svg, f"{{{SVG_NS}}}g", {"id": f"layer-{index:02d}-{slug}", "fill": fill}
             )
+            # Collapse the run into one <path> when every member is translate-only:
+            # bake each translate into the geometry and concatenate the subpaths.
+            # Same pixels, same z-position, far fewer path elements.
+            if (
+                merge_fill_runs
+                and len(members) > 1
+                and all(_is_translate_only(p["transform"]) for p in members)
+            ):
+                subpaths = [sub for path in members for sub in _baked_subpaths(path)]
+                merged = _emit_d(subpaths, precision)
+                if merged:
+                    ET.SubElement(layer, f"{{{SVG_NS}}}path", {"d": merged})
+                    continue
             for path in members:
                 _append_path(layer, path, include_fill=False)
     else:
