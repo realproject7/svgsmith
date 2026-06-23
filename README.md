@@ -123,7 +123,7 @@ svgsmith convert input.png \
 | `--solid-background` | off | Isolate the subject and repaint the background as one clean solid color — removes texture/grain/specks while keeping subject detail. |
 | `--background COLOR` | off | Like `--solid-background`, but repaint the detected background to a **specific** color (`#RRGGBB` or named, e.g. `white`). `auto` = the detected median. |
 | `--transparent-background` | off | **Remove** the background instead of repainting it — the edge-connected background is cut, leaving a **transparent** SVG. The subject is kept even where it shares the background color (color mode). |
-| `--flatten-shading` | off | Collapse soft/glossy shading before tracing (color mode) so smooth gradients (e.g. satin sheen) become clean flat regions instead of shattering into tiny "scratch" facets — a cleaner graphic look and smaller file. |
+| `--flatten-shading` | off | Smooth continuous-tone art (gradients) is traced faithfully into many flat colour bands by default. Pass this to instead **collapse** soft/glossy shading into a few clean flat regions (color mode) — a bold flat-graphic look and a smaller file. |
 | `--uniform-outline` | off | Force an even-width outline band (outlined illustrations only; would add a wrong border on line art). |
 | `--out PATH` | `<input>.svg` | Output SVG path. |
 | `--report {off,json}` | `off` | Print a JSON report to stdout (the only thing on stdout). |

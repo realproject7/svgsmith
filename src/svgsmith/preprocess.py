@@ -51,6 +51,18 @@ class PreprocessOptions:
     linework_radius: int = 9  # black-hat structuring-element size (px, at trace resolution)
     linework_threshold: float = 28.0  # min black-hat response to count as a dark line
 
+    # Perceptual-coverage palette (#65, Tier 1): when True, quantize by covering the
+    # occupied CIELAB colour volume with as many flat colours as the content needs at
+    # a fixed perceptual step (``coverage_step``, ΔE76). The palette count is not
+    # chosen — it emerges from content, so a smooth gradient keeps the many low-step
+    # bands a fixed-K/median-cut path crushes into visible banding. Gated to smooth
+    # continuous-tone inputs by the pipeline; flat art never takes this path.
+    coverage_palette: bool = False
+    coverage_step: float = 4.0  # perceptual step (ΔE76) between adjacent retained colours
+    coverage_fraction: float = 0.99  # cover this share of pixel mass before stopping
+    coverage_min_area: float = 0.0006  # drop colours below this share of pixels (speckle)
+    coverage_max_colors: int = 256  # hard safety cap on emitted colours
+
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
     background_color: str | None = None  # exact bg color (#RRGGBB/named); None = auto median
@@ -258,6 +270,95 @@ def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
     return quantized
 
 
+def quantize_coverage(
+    img: Image.Image,
+    step: float = 3.0,
+    *,
+    coverage: float = 0.99,
+    min_area: float = 0.0006,
+    max_colors: int = 256,
+) -> Image.Image:
+    """Perceptual-coverage quantization in CIELAB (#65).
+
+    Greedy max-coverage: repeatedly take the most popular still-uncovered colour as a
+    new palette entry and absorb every colour within ``step`` (ΔE76) of it, until
+    ``coverage`` of the pixel mass is covered (or ``max_colors`` is hit). The palette
+    size is therefore *emergent* — a flat region collapses to a couple of entries while
+    a smooth gradient, being a long thin manifold in colour space, keeps many low-step
+    bands. Each palette colour is the mean RGB of the pixels it absorbs (real colours,
+    not synthetic centroids); entries below ``min_area`` of the image are merged into
+    their nearest survivor to drop speckle. Dithering is never introduced; the alpha
+    channel, if any, is preserved.
+    """
+    from skimage.color import rgb2lab
+
+    rgba = np.array(img.convert("RGBA"))
+    height, width = rgba.shape[:2]
+    rgb = rgba[:, :, :3].reshape(-1, 3).astype(np.float64)
+    lab = rgb2lab(rgba[:, :, :3] / 255.0).reshape(-1, 3)
+
+    # Weighted histogram over 1-unit LAB bins (cheap, resolution-independent work set).
+    qlab = np.round(lab).astype(np.int64)
+    bins, inverse, counts = np.unique(qlab, axis=0, return_inverse=True, return_counts=True)
+    inverse = inverse.reshape(-1)
+    binf = bins.astype(np.float64)
+    total = float(counts.sum())
+    # Mean RGB per bin, so a palette entry resolves to a real average colour.
+    bin_rgb_sum = np.zeros((len(bins), 3))
+    np.add.at(bin_rgb_sum, inverse, rgb)
+
+    assigned = np.full(len(bins), -1, dtype=np.int64)
+    centers_lab: list[np.ndarray] = []
+    remaining = counts.astype(np.float64).copy()
+    covered = 0.0
+    while covered < coverage * total and len(centers_lab) < max_colors:
+        idx = int(np.argmax(remaining))
+        if remaining[idx] <= 0:
+            break
+        center = binf[idx]
+        within = (np.linalg.norm(binf - center, axis=1) <= step) & (assigned < 0)
+        ci = len(centers_lab)
+        assigned[within] = ci
+        centers_lab.append(center)
+        covered += counts[within].sum()
+        remaining[within] = 0
+
+    if not centers_lab:  # degenerate (single colour) — nothing to do
+        return img
+    centers = np.array(centers_lab)
+    # Tail colours beyond the coverage budget snap to their nearest palette entry.
+    leftover = np.where(assigned < 0)[0]
+    for bi in leftover:
+        assigned[bi] = int(np.argmin(np.linalg.norm(centers - binf[bi], axis=1)))
+
+    # Representative RGB per palette entry = mean RGB of its pixels.
+    n = len(centers)
+    rep_sum = np.zeros((n, 3))
+    rep_cnt = np.zeros(n)
+    np.add.at(rep_sum, assigned, bin_rgb_sum)
+    np.add.at(rep_cnt, assigned, counts)
+    rep_rgb = rep_sum / np.maximum(rep_cnt[:, None], 1.0)
+
+    # Drop speckle entries (below min_area of the image) into their nearest survivor.
+    keep = rep_cnt >= max(1.0, min_area * total)
+    if not keep.all() and keep.any():
+        survivors = np.where(keep)[0]
+        surv_lab = centers[survivors]
+        remap = np.arange(n)
+        for ci in np.where(~keep)[0]:
+            remap[ci] = survivors[int(np.argmin(np.linalg.norm(surv_lab - centers[ci], axis=1)))]
+        assigned = remap[assigned]
+        rep_sum = np.zeros((n, 3))
+        rep_cnt = np.zeros(n)
+        np.add.at(rep_sum, assigned, bin_rgb_sum)
+        np.add.at(rep_cnt, assigned, counts)
+        rep_rgb = np.divide(rep_sum, np.maximum(rep_cnt[:, None], 1.0))
+
+    out_rgb = rep_rgb[assigned[inverse]].round().clip(0, 255).astype(np.uint8)
+    rgba[:, :, :3] = out_rgb.reshape(height, width, 3)
+    return Image.fromarray(rgba, "RGBA").convert(img.mode)
+
+
 def _edge_flood_fill_mask(rgba: np.ndarray, tolerance: int) -> np.ndarray:
     """Boolean mask of background pixels reachable by flood-fill from the borders.
 
@@ -413,7 +514,15 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
     if opts.trace_resolution:
         img = upscale_to(img, opts.trace_resolution)
     if opts.quantize:
-        if opts.kmeans_palette:
+        if opts.coverage_palette:
+            img = quantize_coverage(
+                img,
+                opts.coverage_step,
+                coverage=opts.coverage_fraction,
+                min_area=opts.coverage_min_area,
+                max_colors=opts.coverage_max_colors,
+            )
+        elif opts.kmeans_palette:
             img = quantize_kmeans(
                 img,
                 opts.palette_k,

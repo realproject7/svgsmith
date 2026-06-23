@@ -41,7 +41,7 @@ def _path_count(root: ET.Element) -> int:
 
 
 def test_canonical_presets_present():
-    assert set(PRESETS) == {"logo", "icon", "illustration", "pixel"}
+    assert set(PRESETS) == {"logo", "icon", "illustration", "pixel", "continuous"}
     for name, preset in PRESETS.items():
         assert isinstance(preset, Preset)
         assert preset.name == name
