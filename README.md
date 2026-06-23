@@ -74,6 +74,11 @@ svgsmith convert path/to/image.png --out out.svg --report json
 
 - **Auto-routing** — classifies the input (logo/icon vs illustration vs pixel art) and
   selects the engine + preset automatically. No tracer-flag expertise required.
+- **Low-res cartoon cleanup** — low-resolution, JPEG/anti-aliased flat cartoon art is
+  detected and supersampled before tracing, then snapped to a small fixed-K palette
+  with a pure-black outline anchor — clean flat colors and smooth outlines instead of
+  a scratchy, near-duplicate-color trace. Applied only to that input class (with an
+  output-complexity fallback), so other art is unaffected.
 - **Editable output** — instead of one monolithic `<path>`, output is grouped into
   `<g>` layers with simplified paths and a consolidated color palette.
 - **Self-verifying** — converts, re-rasterizes, diffs against the original (SSIM), and
