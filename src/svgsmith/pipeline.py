@@ -58,7 +58,7 @@ _MIN_EDGE_DENSITY = 0.02
 _MAX_EDGE_DENSITY = 0.12
 # Outline isolation (black-hat) pulls the dark linework out of the fills, so fewer
 # clusters are needed for the actual colors — a tighter palette closer to the
-# artist's true few flats (PerfectVector lands ~8 on the pigeon).
+# artist's true few flats (reference vectorizers land ~8 on a flat cartoon).
 DETAIL_KMEANS_K = {"high": 10, "normal": 8, "clean": 7, "poster": 5}
 # A genuinely flat cartoon supersamples to a low path count (the pigeon ~380). If
 # the supersampled trace blows past this, the input was NOT flat (a textured/photo
