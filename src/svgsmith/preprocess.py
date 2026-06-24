@@ -72,7 +72,7 @@ class PreprocessOptions:
     # pure Tier 1 behaviour (the safe-revert is this flag alone).
     coverage_region_cleanup: bool = False
     coverage_region_min_area: float = 0.0004  # merge components below this share of pixels
-    coverage_region_max_px: int = 2000  # ceiling on the px threshold (protect small marks on huge inputs)
+    coverage_region_max_px: int = 2000  # px ceiling on the threshold (protect small marks)
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
