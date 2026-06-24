@@ -186,3 +186,45 @@ def test_solid_background_auto_uses_median_color():
     assert tuple(out[0, 0]) == (235, 170, 200)
     assert tuple(out[30, 30]) == (235, 170, 200)
     assert tuple(out[20, 30]) == (40, 40, 40)
+
+
+def test_merge_small_regions_noise_de_keeps_distinct_marks():
+    """The detail-aware merge (#economical-fidelity): a small region merges into its
+    neighbour only when that neighbour is closer than ``noise_de`` (ΔE76). A distinct-
+    colour small mark (a dot/stipple speck, large ΔE) is KEPT; a near-colour speck
+    (anti-alias/noise, small ΔE) is absorbed. ``noise_de`` == 0 merges everything."""
+    from svgsmith.preprocess import _merge_small_regions
+
+    # 6x6 grid: region 0 = background; region 1 = small DISTINCT-colour strip (top-left);
+    # region 2 = small NEAR-colour strip (bottom-right). Both are below min_area_px.
+    labels = np.zeros((6, 6), dtype=np.int64)
+    labels[0, 0:2] = 1  # 2 px, distinct
+    labels[5, 4:6] = 2  # 2 px, near-bg
+    region_lab = np.array(
+        [[50.0, 0.0, 0.0], [50.0, 60.0, 60.0], [52.0, 2.0, 2.0]]  # bg  # far  # near
+    )
+    min_area_px = 5.0
+
+    # Legacy behaviour (noise_de=0): both small regions merge into the background.
+    roots0 = _merge_small_regions(labels, region_lab, min_area_px, 0.0)
+    assert roots0[1] == 0
+    assert roots0[2] == 0
+
+    # Detail-aware (noise_de=13): the distinct mark is kept (root is itself); the near
+    # speckle still merges into the background.
+    roots = _merge_small_regions(labels, region_lab, min_area_px, 13.0)
+    assert roots[1] == 1  # distinct-colour mark preserved
+    assert roots[2] == 0  # near-colour noise absorbed
+
+
+def test_coverage_noise_de_dial_orders_detail_levels():
+    """The coverage detail-aware merge threshold rises as the detail dial flattens:
+    'high' keeps the most texture (lowest ΔE), 'poster' collapses the most (highest)."""
+    from svgsmith.pipeline import COVERAGE_NOISE_DE
+
+    assert (
+        COVERAGE_NOISE_DE["high"]
+        < COVERAGE_NOISE_DE["normal"]
+        < COVERAGE_NOISE_DE["clean"]
+        < COVERAGE_NOISE_DE["poster"]
+    )

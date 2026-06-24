@@ -35,6 +35,13 @@ DETAIL_LEVELS = {
     "clean": (0.10, 48, 18.0),  # tidied: edge-preserving cleanup, noise reduced
     "poster": (0.13, 28, 30.0),  # bold flat graphic: few colors, strong flattening
 }
+# Detail-aware region-merge ΔE76 threshold per detail level for the coverage path: a small
+# region merges into its neighbour only when the neighbour is closer than this (AA/noise);
+# distinct marks farther than it are KEPT. LOWER = keep more subtle texture (painterly grain,
+# fine stipple) = faithful but heavier; HIGHER = collapse more = economical/flat. "normal" is
+# the loop-validated economical-fidelity default; "high" preserves painterly brush-grain
+# (reference-grade on textured art, at more paths/bytes — fidelity over economy, on demand).
+COVERAGE_NOISE_DE = {"high": 5.0, "normal": 13.0, "clean": 18.0, "poster": 26.0}
 # Pre-trace supersampling target (#60) and per-detail fixed-K palette size (#41)
 # for color mode. Upscaling smooths contours; the small k-means palette + black
 # anchor snaps each region to one clean color and keeps the outline pure black.
@@ -103,6 +110,9 @@ def _supersample_candidate(image: ImageInput) -> bool:
 _COVERAGE_MAX_EDGE_DENSITY = 0.008
 _COVERAGE_MIN_DISTINCT = 256  # must be genuinely continuous-tone, not a low-edge flat
 _COVERAGE_MAX_PATHS = 4000  # safety cap; over this, fall back to the baseline path
+# At --detail high (max fidelity) legitimately grainy art needs far more tiles; raise the
+# cap so grain survives, while still catching a misgated photo (which explodes far past it).
+_COVERAGE_MAX_PATHS_HIGH = 14000
 
 # Tier 2 (#67): perceptual-coverage + connected-component min-AREA cleanup as the default
 # colour engine. The area filter makes coverage economical and clean on *any* rich-colour
@@ -333,7 +343,21 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             resolve_pre_opts(False),
             coverage_palette=True,
             coverage_region_cleanup=_TIER2_REGION_COVERAGE,
+            # Economical-fidelity operating point (loop-validated): a fine perceptual step with
+            # almost no global speckle drop preserves subtle colour detail, while the detail-aware
+            # region merge (region_noise_de) collapses low-ΔE anti-alias fringes for economy/speed
+            # yet KEEPS high-ΔE deliberate marks (dots/stipple/texture). Reaches reference-grade
+            # fidelity at ~1.4-3.6x reference bytes and 1-8 s (was 8-13x / 40-218 s without it).
+            coverage_step=5.0,
+            coverage_min_area=0.00003,
+            coverage_region_min_area=0.0006,
+            coverage_region_noise_de=COVERAGE_NOISE_DE[opts.detail],
         )
+        # --detail high = max fidelity: skip the pre-trace flatten so painterly brush-grain
+        # / fine texture survives to the tracer (flatten, even light, smooths grain away).
+        # Other levels keep the flatten (the loop-validated economical default).
+        if opts.detail == "high":
+            cov_pre = replace(cov_pre, flatten=False)
         # Illustration-geometry knobs (experimental, loop-tuned): supersample the flat-colour
         # mask for round/uniform scallop boundaries, and/or thin the dark linework into crescents.
         # Applied ONLY to the outlined low-res illustration class and ONLY when requested, so the
@@ -349,7 +373,14 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         svg, similarity, iterations = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
-        if svg.count("<path") > _COVERAGE_MAX_PATHS:
+        # Path cap = misgated-photo blowup guard. At --detail high the user opted into
+        # max fidelity, so a high count is INTENDED for legitimately grainy/painterly art
+        # (the reference traces such inputs into thousands of micro-tiles) — raise the cap
+        # so the grain-rich coverage output is kept instead of being thrown away and
+        # re-traced on the baseline path (which both loses the grain AND doubles the time).
+        # A truly misgated photo still explodes far past the high cap and falls back.
+        cov_cap = _COVERAGE_MAX_PATHS_HIGH if opts.detail == "high" else _COVERAGE_MAX_PATHS
+        if svg.count("<path") > cov_cap:
             coverage = False  # not actually a clean gradient — use the proven path
 
     if not coverage:

@@ -73,6 +73,11 @@ class PreprocessOptions:
     coverage_region_cleanup: bool = False
     coverage_region_min_area: float = 0.0004  # merge components below this share of pixels
     coverage_region_max_px: int = 2000  # px ceiling on the threshold (protect small marks)
+    # Detail-aware merge (#economical-fidelity): keep a small region whose nearest neighbour is
+    # ≥ this ΔE76 away — a *distinct-colour* mark (dot/stipple/texture) drawn on purpose, not
+    # AA/compression noise. Collapses low-ΔE fringes (economy + speed) while preserving the
+    # high-ΔE detail that makes output designer-usable. 0.0 = merge-everything (legacy).
+    coverage_region_noise_de: float = 0.0
     # Lossy-input denoise (#71): JPEG/MPO compression noise inflates the CIELAB volume so
     # coverage emits near-duplicate colours (the pigeon JPEG: 19 vs the reference's ~10). A
     # light edge-preserving bilateral pre-filter, GATED to lossy sources only, removes those
@@ -331,7 +336,10 @@ def _adjacent_region_pairs(region_label: np.ndarray) -> np.ndarray:
 
 
 def _merge_small_regions(
-    region_label: np.ndarray, region_lab: np.ndarray, min_area_px: float
+    region_label: np.ndarray,
+    region_lab: np.ndarray,
+    min_area_px: float,
+    noise_de: float = 0.0,
 ) -> np.ndarray:
     """Absorb every region below ``min_area_px`` into its lowest-ΔE live neighbour.
 
@@ -339,6 +347,13 @@ def _merge_small_regions(
     the surviving region id for each original region id (apply as ``roots[region_label]``).
     The survivor keeps its own colour — merging only *repaints* the small region, so no
     new colours are introduced.
+
+    When ``noise_de`` > 0, a small region whose nearest neighbour is ≥ ``noise_de`` (ΔE76)
+    away is KEPT, not merged: it is a *distinct-colour* mark (a dot, stipple speck, fine
+    texture) the artist drew on purpose, not anti-alias/compression noise. This is the
+    economical-fidelity lever — collapse low-ΔE AA fringes (economy + speed) while keeping
+    high-ΔE deliberate detail (designer-usable). ``noise_de`` == 0 keeps the original
+    merge-everything behaviour.
     """
     import heapq
 
@@ -371,6 +386,8 @@ def _merge_small_regions(
         if not neighbours:
             continue
         best = min(neighbours, key=lambda nb: float(np.linalg.norm(lab[root] - lab[nb])))
+        if noise_de > 0.0 and float(np.linalg.norm(lab[root] - lab[best])) >= noise_de:
+            continue  # distinct-colour mark (dot/stipple/texture) — keep, do not merge
         parent[root] = best
         wa, wb = sizes[best], sizes[root]
         lab[best] = (lab[best] * wa + lab[root] * wb) / (wa + wb)
@@ -462,6 +479,7 @@ def quantize_coverage(
     region_cleanup: bool = False,
     region_min_area: float = 0.0004,
     region_max_px: int = 2000,
+    region_noise_de: float = 0.0,
     dark_thin: int = 0,
     dark_protect: float = 0.0006,
     denoise_lossy: bool = False,
@@ -576,7 +594,9 @@ def quantize_coverage(
             region_lab = centers[region_pal]  # ΔE merge distance uses the palette colour
             min_area_px = min(float(region_min_area) * total, float(region_max_px))
             min_area_px = max(min_area_px, 1.0)
-            roots = _merge_small_regions(region_label, region_lab, min_area_px)
+            roots = _merge_small_regions(
+                region_label, region_lab, min_area_px, region_noise_de
+            )
             pixel_palette = region_pal[roots[region_label]].ravel()
 
     out_rgb = rep_rgb[pixel_palette].round().clip(0, 255).astype(np.uint8).reshape(height, width, 3)
@@ -759,6 +779,7 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
                 region_cleanup=opts.coverage_region_cleanup,
                 region_min_area=opts.coverage_region_min_area,
                 region_max_px=opts.coverage_region_max_px,
+                region_noise_de=opts.coverage_region_noise_de,
                 dark_thin=opts.coverage_dark_thin,
                 dark_protect=opts.coverage_dark_protect,
                 denoise_lossy=lossy_coverage,
