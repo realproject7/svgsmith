@@ -153,6 +153,15 @@ class ConvertOptions:
     transparent_background: bool = False  # opt-in: drop the background → transparent SVG
     flatten_shading: bool = False  # opt-in: collapse soft/glossy shading before tracing
     detail: str = "normal"  # color detail dial: high | normal | clean | poster
+    # Illustration-geometry knobs (experimental; tuned by the daily quality loop). Both default
+    # OFF, so behaviour is unchanged unless set. They apply ONLY to the outlined low-res
+    # illustration class on the coverage path (gated by ``_supersample_candidate``); gradients,
+    # photos, and high-res inputs ignore them. ``illustration_supersample`` traces the flat-colour
+    # mask at this resolution (e.g. 2048) so feather/scallop boundaries come out round and uniform;
+    # ``illustration_dark_thin`` erodes the dark linework by this many steps (at the trace
+    # resolution) so thick outline blobs become thin crescents (small dark detail is protected).
+    illustration_supersample: int = 0
+    illustration_dark_thin: int = 0
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -160,6 +169,14 @@ class ConvertOptions:
             raise ValueError(f"quality must be in [0, 1], got {self.quality}")
         if self.max_iters < 1:
             raise ValueError(f"max_iters must be >= 1, got {self.max_iters}")
+        if self.illustration_supersample < 0:
+            raise ValueError(
+                f"illustration_supersample must be >= 0, got {self.illustration_supersample}"
+            )
+        if self.illustration_dark_thin < 0:
+            raise ValueError(
+                f"illustration_dark_thin must be >= 0, got {self.illustration_dark_thin}"
+            )
         if self.detail not in DETAIL_LEVELS:
             raise ValueError(
                 f"detail must be one of {', '.join(DETAIL_LEVELS)}, got {self.detail!r}"
@@ -317,6 +334,17 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             coverage_palette=True,
             coverage_region_cleanup=_TIER2_REGION_COVERAGE,
         )
+        # Illustration-geometry knobs (experimental, loop-tuned): supersample the flat-colour
+        # mask for round/uniform scallop boundaries, and/or thin the dark linework into crescents.
+        # Applied ONLY to the outlined low-res illustration class and ONLY when requested, so the
+        # default path and gradients/photos are untouched.
+        want_geometry = opts.illustration_supersample or opts.illustration_dark_thin
+        if want_geometry and _supersample_candidate(image):
+            cov_pre = replace(
+                cov_pre,
+                trace_resolution=opts.illustration_supersample or cov_pre.trace_resolution,
+                coverage_dark_thin=opts.illustration_dark_thin,
+            )
         cov_class = classification._replace(preset="continuous")
         svg, similarity, iterations = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
