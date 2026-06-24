@@ -73,6 +73,14 @@ class PreprocessOptions:
     coverage_region_cleanup: bool = False
     coverage_region_min_area: float = 0.0004  # merge components below this share of pixels
     coverage_region_max_px: int = 2000  # px ceiling on the threshold (protect small marks)
+    # Lossy-input denoise (#71): JPEG/MPO compression noise inflates the CIELAB volume so
+    # coverage emits near-duplicate colours (the pigeon JPEG: 19 vs the reference's ~10). A
+    # light edge-preserving bilateral pre-filter, GATED to lossy sources only, removes those
+    # near-duplicates while leaving outlines/edges intact. Clean (PNG) inputs never enter it
+    # and stay byte-identical. ``False`` disables it (safe-revert).
+    coverage_denoise_lossy: bool = True
+    coverage_denoise_sigma_color: float = 0.02
+    coverage_denoise_sigma_spatial: float = 1.5
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
@@ -367,6 +375,45 @@ def _merge_small_regions(
     return np.array([find(i) for i in range(n)], dtype=np.int64)
 
 
+def _is_lossy_source(image: ImageInput) -> bool:
+    """Whether ``image`` comes from a lossy (compression-noisy) format.
+
+    The format is lost once PIL ``.convert()`` runs, so read it from the original handle.
+    In-memory ``Image`` objects with no ``.format`` (and unreadable sources) default to
+    False — no denoise, no harm.
+    """
+    try:
+        if isinstance(image, Image.Image):
+            fmt = image.format
+        else:
+            with Image.open(image) as opened:
+                fmt = opened.format
+    except Exception:
+        return False
+    return fmt in {"JPEG", "JPG", "MPO"}
+
+
+def _denoise_lossy(
+    img: Image.Image, sigma_color: float = 0.02, sigma_spatial: float = 1.5
+) -> Image.Image:
+    """Light edge-preserving bilateral filter for lossy inputs (#71).
+
+    Compression noise spreads the occupied CIELAB volume, so coverage quantization emits
+    near-duplicate colours. A small bilateral pass removes that noise while its range term
+    preserves hard edges (outlines stay crisp). Kept deliberately light — a larger
+    ``sigma_color`` paradoxically *inflates* the palette via coverage redistribution.
+    """
+    from skimage.restoration import denoise_bilateral
+
+    rgba = np.array(img.convert("RGBA"))
+    rgb = rgba[:, :, :3].astype(np.float64) / 255.0
+    smoothed = denoise_bilateral(
+        rgb, sigma_color=sigma_color, sigma_spatial=sigma_spatial, channel_axis=-1
+    )
+    rgba[:, :, :3] = np.clip(smoothed * 255.0, 0, 255).round().astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA").convert(img.mode)
+
+
 def quantize_coverage(
     img: Image.Image,
     step: float = 3.0,
@@ -377,6 +424,9 @@ def quantize_coverage(
     region_cleanup: bool = False,
     region_min_area: float = 0.0004,
     region_max_px: int = 2000,
+    denoise_lossy: bool = False,
+    denoise_sigma_color: float = 0.02,
+    denoise_sigma_spatial: float = 1.5,
 ) -> Image.Image:
     """Perceptual-coverage quantization in CIELAB (#65).
 
@@ -392,15 +442,33 @@ def quantize_coverage(
     """
     from skimage.color import rgb2lab
 
+    # Lossy-input denoise (#71): clean compression noise before building the palette so
+    # coverage stops emitting near-duplicate colours. Gated upstream to lossy sources.
+    if denoise_lossy:
+        img = _denoise_lossy(img, denoise_sigma_color, denoise_sigma_spatial)
+
     rgba = np.array(img.convert("RGBA"))
     height, width = rgba.shape[:2]
     rgb = rgba[:, :, :3].reshape(-1, 3).astype(np.float64)
     lab = rgb2lab(rgba[:, :, :3] / 255.0).reshape(-1, 3)
 
     # Weighted histogram over 1-unit LAB bins (cheap, resolution-independent work set).
+    # Encode each (L, a, b) bin into one integer key (L highest-order) so the dedup is a
+    # 1-D ``np.unique`` instead of ``unique(..., axis=0)``'s lexsort — the dominant cost
+    # on large inputs. The key is monotonic in (L, a, b), so bin order, ``inverse`` and
+    # ``counts`` are bit-for-bit identical to the lexsort; a/b are offset to stay in
+    # [0, _LAB_BASE) (sRGB never reaches ±256 in CIELAB).
+    _LAB_OFF, _LAB_BASE = 256, 1024
     qlab = np.round(lab).astype(np.int64)
-    bins, inverse, counts = np.unique(qlab, axis=0, return_inverse=True, return_counts=True)
+    keys = (qlab[:, 0] * _LAB_BASE + (qlab[:, 1] + _LAB_OFF)) * _LAB_BASE + (qlab[:, 2] + _LAB_OFF)
+    ukeys, inverse, counts = np.unique(keys, return_inverse=True, return_counts=True)
     inverse = inverse.reshape(-1)
+    bins = np.stack(
+        [ukeys // (_LAB_BASE * _LAB_BASE),
+         ukeys // _LAB_BASE % _LAB_BASE - _LAB_OFF,
+         ukeys % _LAB_BASE - _LAB_OFF],
+        axis=1,
+    )
     binf = bins.astype(np.float64)
     total = float(counts.sum())
     # Mean RGB per bin, so a palette entry resolves to a real average colour.
@@ -616,6 +684,13 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
     """
     opts = opts or PreprocessOptions()
     img = load_image(image, "RGBA")
+    # Read the source format from the original handle (lost after load_image's convert).
+    is_lossy = _is_lossy_source(image)
+    # On lossy sources the coverage path swaps the default flatten for a lighter,
+    # edge-preserving bilateral (#71): a stronger flatten paradoxically *inflates* the
+    # coverage palette, while the bilateral removes compression near-duplicates and keeps
+    # outlines crisp (pigeon 17 → 12 colours). Clean inputs keep flatten unchanged.
+    lossy_coverage = is_lossy and opts.coverage_palette and opts.coverage_denoise_lossy
 
     if opts.solid_background:
         img = solid_background(img, opts.background_tolerance, opts.background_color)
@@ -623,7 +698,7 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
         img = upscale_tiny(img, opts.min_dimension)
     if opts.denoise:
         img = denoise(img, opts.median_size)
-    if opts.flatten:
+    if opts.flatten and not lossy_coverage:
         img = flatten_colors(img, opts.flatten_sigma, opts.flatten_spatial)
     # Supersample AFTER denoise/flatten: the bilateral filter is O(pixels) and must
     # run on the native grid (running it on the 2048 upscale is ~70x slower for no
@@ -641,6 +716,9 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
                 region_cleanup=opts.coverage_region_cleanup,
                 region_min_area=opts.coverage_region_min_area,
                 region_max_px=opts.coverage_region_max_px,
+                denoise_lossy=lossy_coverage,
+                denoise_sigma_color=opts.coverage_denoise_sigma_color,
+                denoise_sigma_spatial=opts.coverage_denoise_sigma_spatial,
             )
         elif opts.kmeans_palette:
             img = quantize_kmeans(

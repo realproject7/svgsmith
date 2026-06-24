@@ -297,6 +297,31 @@ def test_low_res_rich_color_uses_coverage_engine_by_default(tmp_path):
     assert svg.count("<path") < 200  # economical (region cleanup), not bloated
 
 
+def test_lossy_denoise_is_gated_to_lossy_sources(tmp_path):
+    """#71: the coverage denoise fires only on lossy (JPEG/MPO) sources. On a clean PNG
+    the gate never fires, so output is byte-identical whether the option is on or off —
+    the clean-input no-regression guarantee (Priority #1)."""
+    from dataclasses import replace
+
+    import numpy as np
+
+    from svgsmith.pipeline import _preprocess_opts
+    from svgsmith.preprocess import _is_lossy_source, preprocess
+
+    img = _gradient_with_black_bars()
+    png = tmp_path / "c.png"
+    jpg = tmp_path / "c.jpg"
+    img.save(png)
+    img.save(str(jpg), quality=70)
+    assert _is_lossy_source(str(jpg)) is True
+    assert _is_lossy_source(str(png)) is False
+
+    base = replace(_preprocess_opts("color"), coverage_palette=True, coverage_region_cleanup=True)
+    on = preprocess(str(png), replace(base, coverage_denoise_lossy=True))
+    off = preprocess(str(png), replace(base, coverage_denoise_lossy=False))
+    assert np.array_equal(np.array(on), np.array(off))  # clean PNG untouched by the gate
+
+
 def test_detail_level_validation_and_spectrum():
     import pytest
 

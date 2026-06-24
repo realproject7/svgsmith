@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
@@ -224,6 +225,13 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     """
     opts = opts or ConvertOptions()
     image: ImageInput = load_image(input_path, "RGBA")
+    # load_image's .convert() drops the source format; re-attach it so the lossy-input
+    # denoise gate (#71) can tell a JPEG from a clean PNG downstream.
+    try:
+        with Image.open(input_path) as _src:
+            image.format = _src.format
+    except Exception:
+        pass
 
     classification = _resolve_classification(image, opts.mode)
     flatten_sigma, palette_size, palette_threshold = DETAIL_LEVELS[opts.detail]
