@@ -322,6 +322,27 @@ def test_lossy_denoise_is_gated_to_lossy_sources(tmp_path):
     assert np.array_equal(np.array(on), np.array(off))  # clean PNG untouched by the gate
 
 
+def test_illustration_geometry_knobs_are_opt_in(tmp_path):
+    """Phase 0: ``illustration_supersample`` / ``illustration_dark_thin`` are OFF by default
+    (output unchanged) and only take effect when explicitly set on the illustration class."""
+    src = tmp_path / "c.png"
+    _gradient_with_black_bars().save(src)  # low-res, rich-colour, mid-edge = illustration signature
+
+    base, _ = convert(str(src), ConvertOptions(max_iters=1))
+    base_vb = max(float(v) for v in ET.fromstring(base).get("viewBox").split())
+    assert base_vb == 300  # default: native resolution, no supersample
+
+    sup, _ = convert(str(src), ConvertOptions(max_iters=1, illustration_supersample=2048))
+    sup_vb = max(float(v) for v in ET.fromstring(sup).get("viewBox").split())
+    assert sup_vb > 300  # the supersample knob traces at a larger internal resolution
+
+    # negative knob values fail fast
+    with pytest.raises(ValueError):
+        ConvertOptions(illustration_dark_thin=-1)
+    with pytest.raises(ValueError):
+        ConvertOptions(illustration_supersample=-1)
+
+
 def test_detail_level_validation_and_spectrum():
     import pytest
 

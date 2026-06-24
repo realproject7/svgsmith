@@ -81,6 +81,15 @@ class PreprocessOptions:
     coverage_denoise_lossy: bool = True
     coverage_denoise_sigma_color: float = 0.02
     coverage_denoise_sigma_spatial: float = 1.5
+    # Dark-line thinning (experimental, loop-tuned; 0 = OFF = unchanged): erode the near-black
+    # linework cluster by this many steps so thick outline blobs become thin crescents like a
+    # clean illustration. Small dark components (eye pupils, beak tip) below
+    # ``coverage_dark_protect`` of the image are kept intact; the removed band takes its nearest
+    # non-dark colour. Best paired with supersampling (the pipeline gates both to the illustration
+    # class). Known follow-up: the nearest-colour fill can leave faint grey where it picks a shadow
+    # tone — a target for the daily quality loop to refine.
+    coverage_dark_thin: int = 0
+    coverage_dark_protect: float = 0.0006
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
@@ -414,6 +423,35 @@ def _denoise_lossy(
     return Image.fromarray(rgba, "RGBA").convert(img.mode)
 
 
+def _thin_dark(rgb: np.ndarray, iters: int, protect_frac: float = 0.0006) -> np.ndarray:
+    """Erode the near-black linework by ``iters`` steps so thick outline blobs become thin
+    crescents; the removed band takes its nearest non-dark colour. Dark connected components
+    below ``protect_frac`` of the image (eye pupils, beak tip) are kept intact.
+
+    Operates on a (H, W, 3) uint8 RGB array and returns a new array.
+    """
+    from scipy import ndimage
+
+    if iters <= 0:
+        return rgb
+    dark = rgb.max(axis=2) < 60
+    if not dark.any():
+        return rgb
+    labels, n = ndimage.label(dark)
+    sizes = np.bincount(labels.ravel())
+    small = [i for i in range(1, n + 1) if sizes[i] < protect_frac * dark.size]
+    protect = np.isin(labels, small) if small else np.zeros_like(dark)
+    eroded = ndimage.binary_erosion(dark, iterations=iters) | protect
+    removed = dark & ~eroded
+    if not removed.any():
+        return rgb
+    idx = ndimage.distance_transform_edt(dark, return_distances=False, return_indices=True)
+    nearest = rgb[tuple(idx)]
+    out = rgb.copy()
+    out[removed] = nearest[removed]
+    return out
+
+
 def quantize_coverage(
     img: Image.Image,
     step: float = 3.0,
@@ -424,6 +462,8 @@ def quantize_coverage(
     region_cleanup: bool = False,
     region_min_area: float = 0.0004,
     region_max_px: int = 2000,
+    dark_thin: int = 0,
+    dark_protect: float = 0.0006,
     denoise_lossy: bool = False,
     denoise_sigma_color: float = 0.02,
     denoise_sigma_spatial: float = 1.5,
@@ -539,8 +579,11 @@ def quantize_coverage(
             roots = _merge_small_regions(region_label, region_lab, min_area_px)
             pixel_palette = region_pal[roots[region_label]].ravel()
 
-    out_rgb = rep_rgb[pixel_palette].round().clip(0, 255).astype(np.uint8)
-    rgba[:, :, :3] = out_rgb.reshape(height, width, 3)
+    out_rgb = rep_rgb[pixel_palette].round().clip(0, 255).astype(np.uint8).reshape(height, width, 3)
+    # Dark-line thinning (#illustration-geometry): thin thick outline blobs into crescents.
+    if dark_thin:
+        out_rgb = _thin_dark(out_rgb, dark_thin, dark_protect)
+    rgba[:, :, :3] = out_rgb
     return Image.fromarray(rgba, "RGBA").convert(img.mode)
 
 
@@ -716,6 +759,8 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
                 region_cleanup=opts.coverage_region_cleanup,
                 region_min_area=opts.coverage_region_min_area,
                 region_max_px=opts.coverage_region_max_px,
+                dark_thin=opts.coverage_dark_thin,
+                dark_protect=opts.coverage_dark_protect,
                 denoise_lossy=lossy_coverage,
                 denoise_sigma_color=opts.coverage_denoise_sigma_color,
                 denoise_sigma_spatial=opts.coverage_denoise_sigma_spatial,
