@@ -89,6 +89,39 @@ def _supersample_candidate(image: ImageInput) -> bool:
     gray = np.asarray(rgb.convert("L"), dtype=float)
     edge_density = float((np.hypot(sobel(gray, 0), sobel(gray, 1)) > 64).mean())
     return _MIN_EDGE_DENSITY < edge_density < _MAX_EDGE_DENSITY
+
+
+# Coverage-quant gate (#65, Tier 1). Smooth continuous-tone art (gradients) loses its
+# colour to the fixed-K / median-cut + LAB-merge path (a 200-band gradient collapses to
+# ~15 visible steps). The perceptual-coverage path keeps the bands. The gate is
+# deliberately narrow: a near-zero hard-edge density isolates the smooth-gradient class
+# with a wide margin below every other category (measured on the study corpus: gradients
+# <= 0.0045, the next-lowest non-gradient >= 0.014, flat art >= 0.035), so flat/outlined
+# illustration — the must-stay-clean class — never takes this path. A complexity fallback
+# in ``convert`` backs out to the baseline if a trace still explodes.
+_COVERAGE_MAX_EDGE_DENSITY = 0.008
+_COVERAGE_MIN_DISTINCT = 256  # must be genuinely continuous-tone, not a low-edge flat
+_COVERAGE_MAX_PATHS = 4000  # safety cap; over this, fall back to the baseline path
+
+
+def _coverage_candidate(image: ImageInput) -> bool:
+    """Whether ``image`` is the smooth, rich, continuous-tone (gradient) class.
+
+    Edge density scales ~1/linear-dimension, so the threshold is conservative by design:
+    a smaller gradient reads as higher-edge and is simply skipped (a safe miss), never a
+    flat misfiring into the coverage path.
+    """
+    rgb = load_image(image, "RGB")
+    # Genuinely continuous tone (a flat 2-colour image is also low-edge but must not enter).
+    if rgb.getcolors(maxcolors=_COVERAGE_MIN_DISTINCT) is not None:
+        return False
+    from scipy.ndimage import sobel
+
+    gray = np.asarray(rgb.convert("L"), dtype=float)
+    edge_density = float((np.hypot(sobel(gray, 0), sobel(gray, 1)) > 64).mean())
+    return edge_density < _COVERAGE_MAX_EDGE_DENSITY
+
+
 # Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
 # output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
 _SMOOTH_SSIM_TOLERANCE = 0.06
@@ -218,16 +251,28 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             pre = replace(pre, solid_background=True, background_color=target)
         return pre
 
-    def render(pre: PreprocessOptions) -> tuple[str, float, int]:
-        """Trace + verify-loop + smooth for one preprocess config -> (svg, score, iters)."""
+    def render(
+        pre: PreprocessOptions,
+        classification: Classification = classification,
+        palette_threshold: float | None = palette_threshold if is_color else None,
+        max_iters: int = opts.max_iters,
+    ) -> tuple[str, float, int]:
+        """Trace + verify-loop + smooth for one preprocess config -> (svg, score, iters).
+
+        ``classification`` / ``palette_threshold`` / ``max_iters`` default to the resolved
+        values; the coverage-quant path overrides them (the ``continuous`` preset + a
+        near-zero merge threshold so the rich emergent palette survives, and a single pass
+        since the palette is already fixed in preprocessing — the colour-ramp loop only
+        re-traces at the same palette and would multiply trace cost for no gain).
+        """
         svg, result = run_loop(
             preprocess(image, pre),
             classification,
             quality=opts.quality,
-            max_iters=opts.max_iters,
+            max_iters=max_iters,
             editable=opts.editable,
             reference=image,  # score against the true original, not the preprocessed image
-            palette_threshold=palette_threshold if is_color else None,
+            palette_threshold=palette_threshold,
         )
         # Curve-refit color output so contours are smooth (the verify loop traces
         # quantized pixel edges, which wobble). Keep the smoothed result only if it
@@ -242,12 +287,30 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                 svg, similarity = smoothed, smoothed_score
         return svg, similarity, result.iterations
 
-    supersampled = is_color and _supersample_candidate(image)
-    svg, similarity, iterations = render(resolve_pre_opts(supersampled))
-    # Output-complexity guard: a real flat cartoon supersamples to few paths. If the
-    # trace exploded, the gate admitted a non-flat input — fall back to the baseline.
-    if supersampled and svg.count("<path") > _SUPERSAMPLE_MAX_PATHS:
-        svg, similarity, iterations = render(resolve_pre_opts(False))
+    # Smooth continuous-tone art (gradients): perceptual-coverage quantization keeps the
+    # many low-step bands a fixed-K path crushes into visible banding. Traced with the
+    # ``continuous`` preset (preserve the palette) and no postprocess LAB merge. Flat /
+    # outlined art never reaches this branch (see _coverage_candidate). A complexity
+    # fallback backs out to the baseline if a misgated input still explodes.
+    # --flatten-shading is the explicit "collapse shading to a clean flat look" opt-out,
+    # the opposite of coverage's faithful many-band preservation — so it bypasses coverage.
+    coverage = is_color and not opts.flatten_shading and _coverage_candidate(image)
+    if coverage:
+        cov_pre = replace(resolve_pre_opts(False), coverage_palette=True)
+        cov_class = classification._replace(preset="continuous")
+        svg, similarity, iterations = render(
+            cov_pre, cov_class, palette_threshold=0.0, max_iters=1
+        )
+        if svg.count("<path") > _COVERAGE_MAX_PATHS:
+            coverage = False  # not actually a clean gradient — use the proven path
+
+    if not coverage:
+        supersampled = is_color and _supersample_candidate(image)
+        svg, similarity, iterations = render(resolve_pre_opts(supersampled))
+        # Output-complexity guard: a real flat cartoon supersamples to few paths. If the
+        # trace exploded, the gate admitted a non-flat input — fall back to the baseline.
+        if supersampled and svg.count("<path") > _SUPERSAMPLE_MAX_PATHS:
+            svg, similarity, iterations = render(resolve_pre_opts(False))
 
     # Transparent background: trace/verify ran normally (with the background), so
     # the loop is unaffected; here we cut the edge-connected background paths from

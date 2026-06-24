@@ -1,3 +1,3 @@
 """svgsmith — convert raster images into clean, editable SVG."""
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"

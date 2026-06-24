@@ -91,6 +91,23 @@ PRESETS: dict[str, Preset] = {
         alphamax=0.0,
         opttolerance=0.0,
     ),
+    "continuous": Preset(
+        name="continuous",
+        # Smooth continuous-tone art (#65, coverage-quant path). The image arrives
+        # already flattened to an emergent perceptual-coverage palette, so VTracer traces
+        # at max color_precision to keep the bands (cp=6 would re-merge them back into a
+        # few visible steps). Postprocess also skips the LAB merge for this path.
+        # layer_difference 8 (not 0): on the pre-flattened input it does not crush bands
+        # (SSIM is unchanged vs 0) but trims VTracer's boundary-colour inflation, so the
+        # output stays close to the emergent palette instead of ballooning.
+        color_precision=8,
+        layer_difference=8,
+        filter_speckle=4,
+        corner_threshold=60,
+        turdsize=2,
+        alphamax=1.0,
+        opttolerance=0.4,
+    ),
 }
 
 
