@@ -62,6 +62,17 @@ class PreprocessOptions:
     coverage_fraction: float = 0.99  # cover this share of pixel mass before stopping
     coverage_min_area: float = 0.0006  # drop colours below this share of pixels (speckle)
     coverage_max_colors: int = 256  # hard safety cap on emitted colours
+    # Spatial region cleanup (#67, Tier 2): after coverage quantization, merge by
+    # connected-component *area* rather than by global colour mass. A gradient band is
+    # thin-but-long (large area → kept) while an anti-alias sliver / linework fringe is
+    # thin-but-short (sub-area → absorbed into its nearest-ΔE neighbour, which collapses
+    # ragged dark linework into clean continuous outline regions and keeps flat art
+    # economical). This reaches gradients *inside* hard-edged shapes (#69) and fixes
+    # over-split outlines (#66) — the cases the narrow Tier 1 gate can't. ``False`` keeps
+    # pure Tier 1 behaviour (the safe-revert is this flag alone).
+    coverage_region_cleanup: bool = False
+    coverage_region_min_area: float = 0.0004  # merge components below this share of pixels
+    coverage_region_max_px: int = 2000  # px ceiling on the threshold (protect small marks)
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
@@ -270,6 +281,92 @@ def quantize_colors(img: Image.Image, palette_size: int) -> Image.Image:
     return quantized
 
 
+def _connected_regions(label_img: np.ndarray) -> tuple[np.ndarray, int]:
+    """Connected components (4-connectivity) within equal-value runs of ``label_img``.
+
+    Returns a contiguous ``region_label`` map (0..n-1) and the region count ``n``.
+    """
+    from scipy import ndimage
+
+    struct = ndimage.generate_binary_structure(2, 1)  # 4-connectivity
+    out = np.zeros(label_img.shape, dtype=np.int64)
+    next_id = 0
+    for value in np.unique(label_img):
+        comp, count = ndimage.label(label_img == value, structure=struct)
+        if count:
+            mask = comp > 0
+            out[mask] = comp[mask] + next_id  # 1-based within this colour
+            next_id += count
+    # ``out`` now holds contiguous ids 1..next_id; shift to 0-based 0..next_id-1.
+    return out - 1, next_id
+
+
+def _adjacent_region_pairs(region_label: np.ndarray) -> np.ndarray:
+    """Unique unordered adjacent region-id pairs (4-connectivity), vectorized."""
+    horiz = np.stack([region_label[:, :-1].ravel(), region_label[:, 1:].ravel()], axis=1)
+    vert = np.stack([region_label[:-1, :].ravel(), region_label[1:, :].ravel()], axis=1)
+    pairs = np.concatenate([horiz, vert], axis=0)
+    pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+    if not len(pairs):
+        return pairs
+    pairs.sort(axis=1)
+    return np.unique(pairs, axis=0)
+
+
+def _merge_small_regions(
+    region_label: np.ndarray, region_lab: np.ndarray, min_area_px: float
+) -> np.ndarray:
+    """Absorb every region below ``min_area_px`` into its lowest-ΔE live neighbour.
+
+    Smallest-first (a region that grows past the threshold is kept). Returns ``roots``:
+    the surviving region id for each original region id (apply as ``roots[region_label]``).
+    The survivor keeps its own colour — merging only *repaints* the small region, so no
+    new colours are introduced.
+    """
+    import heapq
+
+    n = int(region_label.max()) + 1
+    sizes = np.bincount(region_label.ravel(), minlength=n).astype(np.float64)
+    parent = np.arange(n)
+
+    def find(x: int) -> int:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    adj: list[set[int]] = [set() for _ in range(n)]
+    for a, b in _adjacent_region_pairs(region_label):
+        adj[int(a)].add(int(b))
+        adj[int(b)].add(int(a))
+
+    lab = [region_lab[i].astype(np.float64).copy() for i in range(n)]
+    heap = [(sizes[i], i) for i in range(n) if sizes[i] < min_area_px]
+    heapq.heapify(heap)
+    while heap:
+        _, region = heapq.heappop(heap)
+        root = find(region)
+        if root != region or sizes[root] >= min_area_px:
+            continue  # already merged, or grew past the threshold
+        neighbours = {find(nb) for nb in adj[root]} - {root}
+        if not neighbours:
+            continue
+        best = min(neighbours, key=lambda nb: float(np.linalg.norm(lab[root] - lab[nb])))
+        parent[root] = best
+        wa, wb = sizes[best], sizes[root]
+        lab[best] = (lab[best] * wa + lab[root] * wb) / (wa + wb)
+        sizes[best] += sizes[root]
+        sizes[root] = 0.0
+        adj[best] |= adj[root]
+        adj[best].discard(best)
+        if sizes[best] < min_area_px:
+            heapq.heappush(heap, (sizes[best], best))
+
+    return np.array([find(i) for i in range(n)], dtype=np.int64)
+
+
 def quantize_coverage(
     img: Image.Image,
     step: float = 3.0,
@@ -277,6 +374,9 @@ def quantize_coverage(
     coverage: float = 0.99,
     min_area: float = 0.0006,
     max_colors: int = 256,
+    region_cleanup: bool = False,
+    region_min_area: float = 0.0004,
+    region_max_px: int = 2000,
 ) -> Image.Image:
     """Perceptual-coverage quantization in CIELAB (#65).
 
@@ -354,7 +454,24 @@ def quantize_coverage(
         np.add.at(rep_cnt, assigned, counts)
         rep_rgb = np.divide(rep_sum, np.maximum(rep_cnt[:, None], 1.0))
 
-    out_rgb = rep_rgb[assigned[inverse]].round().clip(0, 255).astype(np.uint8)
+    pixel_palette = assigned[inverse]  # palette index per pixel (flat)
+
+    # Tier 2 (#67): merge by connected-component *area*, not global colour mass. This
+    # reaches gradients inside hard-edged shapes and collapses ragged dark linework into
+    # clean continuous outlines, while keeping flat art economical.
+    if region_cleanup:
+        region_label, n_regions = _connected_regions(pixel_palette.reshape(height, width))
+        if n_regions > 1:
+            # Palette index per region (regions are constant-colour, so any member works).
+            region_pal = np.zeros(n_regions, dtype=np.int64)
+            region_pal[region_label.ravel()] = pixel_palette
+            region_lab = centers[region_pal]  # ΔE merge distance uses the palette colour
+            min_area_px = min(float(region_min_area) * total, float(region_max_px))
+            min_area_px = max(min_area_px, 1.0)
+            roots = _merge_small_regions(region_label, region_lab, min_area_px)
+            pixel_palette = region_pal[roots[region_label]].ravel()
+
+    out_rgb = rep_rgb[pixel_palette].round().clip(0, 255).astype(np.uint8)
     rgba[:, :, :3] = out_rgb.reshape(height, width, 3)
     return Image.fromarray(rgba, "RGBA").convert(img.mode)
 
@@ -521,6 +638,9 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
                 coverage=opts.coverage_fraction,
                 min_area=opts.coverage_min_area,
                 max_colors=opts.coverage_max_colors,
+                region_cleanup=opts.coverage_region_cleanup,
+                region_min_area=opts.coverage_region_min_area,
+                region_max_px=opts.coverage_region_max_px,
             )
         elif opts.kmeans_palette:
             img = quantize_kmeans(

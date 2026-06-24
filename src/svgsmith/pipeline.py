@@ -103,18 +103,26 @@ _COVERAGE_MAX_EDGE_DENSITY = 0.008
 _COVERAGE_MIN_DISTINCT = 256  # must be genuinely continuous-tone, not a low-edge flat
 _COVERAGE_MAX_PATHS = 4000  # safety cap; over this, fall back to the baseline path
 
+# Tier 2 (#67): perceptual-coverage + connected-component min-AREA cleanup as the default
+# colour engine. The area filter makes coverage economical and clean on *any* rich-colour
+# input — gradients inside hard-edged shapes (#69), ragged dark outlines (#66), and flat
+# art alike — so the narrow edge-density gate is no longer needed. SAFE-REVERT: set this
+# False to fall back to pure Tier 1 (narrow full-frame-gradient gate, no region cleanup).
+_TIER2_REGION_COVERAGE = True
+
 
 def _coverage_candidate(image: ImageInput) -> bool:
-    """Whether ``image`` is the smooth, rich, continuous-tone (gradient) class.
+    """Whether ``image`` should take the perceptual-coverage colour path.
 
-    Edge density scales ~1/linear-dimension, so the threshold is conservative by design:
-    a smaller gradient reads as higher-edge and is simply skipped (a safe miss), never a
-    flat misfiring into the coverage path.
+    Requires genuinely rich colour (>256 distinct) so a truly flat low-colour image keeps
+    the proven baseline. Tier 2 then admits any such input (the region cleanup keeps it
+    economical); Tier 1 additionally requires near-zero hard edges (full-frame gradients).
     """
     rgb = load_image(image, "RGB")
-    # Genuinely continuous tone (a flat 2-colour image is also low-edge but must not enter).
     if rgb.getcolors(maxcolors=_COVERAGE_MIN_DISTINCT) is not None:
         return False
+    if _TIER2_REGION_COVERAGE:
+        return True
     from scipy.ndimage import sobel
 
     gray = np.asarray(rgb.convert("L"), dtype=float)
@@ -296,7 +304,11 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     # the opposite of coverage's faithful many-band preservation — so it bypasses coverage.
     coverage = is_color and not opts.flatten_shading and _coverage_candidate(image)
     if coverage:
-        cov_pre = replace(resolve_pre_opts(False), coverage_palette=True)
+        cov_pre = replace(
+            resolve_pre_opts(False),
+            coverage_palette=True,
+            coverage_region_cleanup=_TIER2_REGION_COVERAGE,
+        )
         cov_class = classification._replace(preset="continuous")
         svg, similarity, iterations = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1

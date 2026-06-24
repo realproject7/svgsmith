@@ -250,6 +250,10 @@ def test_supersample_falls_back_when_the_trace_explodes(monkeypatch, tmp_path):
     src = tmp_path / "cartoon.png"
     _gradient_with_black_bars().save(src)
 
+    # Coverage (Tier 2) is the default for rich-colour inputs; disable it so the
+    # supersample path (its fallback) is the one under test here.
+    monkeypatch.setattr(pipeline_module, "_coverage_candidate", lambda image: False)
+
     # Baseline: gate forced off, so the standard median-cut path runs.
     monkeypatch.setattr(pipeline_module, "_supersample_candidate", lambda image: False)
     baseline_paths = convert(str(src), ConvertOptions(max_iters=1))[1].svg.paths
@@ -262,9 +266,14 @@ def test_supersample_falls_back_when_the_trace_explodes(monkeypatch, tmp_path):
     assert fellback_paths == baseline_paths
 
 
-def test_low_res_flat_cartoon_is_supersampled(tmp_path):
-    """End to end: a triggering low-res input is traced at a larger internal
-    resolution, so the output viewBox exceeds the native size."""
+def test_low_res_flat_cartoon_is_supersampled(monkeypatch, tmp_path):
+    """End to end: with the coverage engine disabled, a triggering low-res input is
+    traced at a larger internal resolution (supersample path), so the output viewBox
+    exceeds the native size."""
+    import svgsmith.pipeline as pipeline_module
+
+    # Coverage (Tier 2) is the default; disable it to exercise the supersample path.
+    monkeypatch.setattr(pipeline_module, "_coverage_candidate", lambda image: False)
     src = tmp_path / "cartoon.png"
     _gradient_with_black_bars().save(src)
     svg, report = convert(str(src), ConvertOptions(max_iters=1))
@@ -273,6 +282,19 @@ def test_low_res_flat_cartoon_is_supersampled(tmp_path):
     assert view_box is not None
     assert max(float(v) for v in view_box.split()) > 300  # upscaled past native 300px
     assert report.mode_used == "color"
+
+
+def test_low_res_rich_color_uses_coverage_engine_by_default(tmp_path):
+    """Tier 2 (#67): a low-res, rich-colour input (gradient + hard bars) traces via the
+    perceptual-coverage + region-cleanup engine by default — a clean, economical,
+    faithful SVG at native resolution (the coverage path supersedes supersampling for
+    rich-colour inputs)."""
+    src = tmp_path / "cartoon.png"
+    _gradient_with_black_bars().save(src)
+    svg, report = convert(str(src), ConvertOptions(max_iters=1))
+    assert report.mode_used == "color"
+    assert report.similarity > 0.85  # faithful
+    assert svg.count("<path") < 200  # economical (region cleanup), not bloated
 
 
 def test_detail_level_validation_and_spectrum():
