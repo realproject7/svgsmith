@@ -15,7 +15,7 @@ from PIL import Image
 
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
-from svgsmith.postprocess import drop_background_paths, snap_background_layer
+from svgsmith.postprocess import drop_background_paths, snap_background_layer, snap_dark_fills
 from svgsmith.preprocess import PreprocessOptions, _edge_flood_fill_mask, preprocess
 from svgsmith.report import Report, svg_stats
 from svgsmith.smooth import smooth_svg
@@ -121,6 +121,51 @@ _COVERAGE_MAX_PATHS_HIGH = 14000
 # False to fall back to pure Tier 1 (narrow full-frame-gradient gate, no region cleanup).
 _TIER2_REGION_COVERAGE = True
 
+# Dark-outline black snap (#lever-C). On the coverage path the dark linework of an outlined
+# cartoon scatters across many near-black tints (the pigeon JPEG: 186 dark colours), bloating
+# paths and giving a ragged variable-width outline. We pull every pixel within this ΔE76 ball of
+# pure black out of the palette build and paint it ONE clean #000000 region (NO morphology — that
+# was verified to regress outline IoU). ``_COVERAGE_BLACK_SNAP_DE`` is the ball radius;
+# ``_COVERAGE_BLACK_SNAP_MIN_AREA`` is the near-black share that must be present before it fires,
+# so line-free / no-black art (e.g. c_07) is left byte-identical. SSIM-guarded in ``convert``: the
+# snapped trace is kept only when it does not cost more than ``_COVERAGE_BLACK_SNAP_SSIM_DROP``
+# SSIM against the no-snap trace. SAFE-REVERT: set the ΔE to 0.0 to disable.
+_COVERAGE_BLACK_SNAP_DE = 12.0
+_COVERAGE_BLACK_SNAP_MIN_AREA = 0.004
+_COVERAGE_BLACK_SNAP_SSIM_DROP = 0.01
+
+
+def _distinct_dark_fills(svg: str) -> int:
+    """Count distinct dark (luma < 60) fill colours in an SVG — the dark-layer cleanliness
+    proxy. Used to guard the black snap: a sharper black core can make the colour tracer
+    carve MORE near-black edge tints on some inputs, so we keep the snap only when it does
+    not inflate this count.
+    """
+    import re
+
+    dark = set()
+    for hexc in re.findall(r'fill="(#[0-9a-fA-F]{6})"', svg):
+        r, g, b = (int(hexc[i : i + 2], 16) for i in (1, 3, 5))
+        if 0.299 * r + 0.587 * g + 0.114 * b < 60:
+            dark.add(hexc.lower())
+    return len(dark)
+
+
+def _has_black_outline(image: ImageInput) -> bool:
+    """Cheap pre-check: does ``image`` carry enough near-pure-black mass to snap an outline?
+
+    Mirrors the per-pixel test inside ``quantize_coverage`` (ΔE76 to the LAB origin) so the
+    pipeline can decide up front whether the black-snap will fire — and therefore whether the
+    SSIM-guard's extra no-snap render is even needed. No-black art short-circuits to a single
+    render with byte-identical output.
+    """
+    from skimage.color import rgb2lab
+
+    rgb = np.asarray(load_image(image, "RGB"), dtype=np.float64)
+    lab = rgb2lab(rgb / 255.0)
+    near_black = (np.linalg.norm(lab, axis=2) <= _COVERAGE_BLACK_SNAP_DE).mean()
+    return float(near_black) >= _COVERAGE_BLACK_SNAP_MIN_AREA
+
 
 def _coverage_candidate(image: ImageInput) -> bool:
     """Whether ``image`` should take the perceptual-coverage colour path.
@@ -144,8 +189,94 @@ def _coverage_candidate(image: ImageInput) -> bool:
 # Max SSIM the curve-smoothing pass may cost before we fall back to un-smoothed
 # output (smoothing reduces SSIM slightly by design; a big drop = lost feature).
 _SMOOTH_SSIM_TOLERANCE = 0.06
+# Wobble-relief escape clause for the smooth gate. Raw-SSIM rewards the antialiased
+# pixel staircase, so on the wobbliest inputs the visibly-SHARPER smoothed output can
+# score LOWER and get vetoed by the plain SSIM gate above — exactly where smoothing is
+# most needed (e.g. a jittery vtracer polyline that smoothing straightens). To recover
+# those cases we measure path wobble directly off the SVG geometry (angle sign-flips per
+# unit length over the polyline approximation — the same structure SSIM is blind to). If
+# smoothing cuts wobble by at least _SMOOTH_WOBBLE_RELIEF (relative) AND SSIM stays within
+# the wider _SMOOTH_SSIM_HARD_FLOOR, we keep the smoothed output even when the plain SSIM
+# tolerance would veto it. The hard floor still guards against a genuine feature loss
+# (which would crater SSIM far past the staircase penalty). Inputs that already clear the
+# plain tolerance are unaffected, so default behaviour is unchanged for them.
+_SMOOTH_WOBBLE_RELIEF = 0.25
+_SMOOTH_SSIM_HARD_FLOOR = 0.10
 _MODE_PRESET = {"binary": "logo", "color": "illustration", "pixel": "pixel"}
 MODES = ("auto", *_MODE_PRESET)
+
+
+def _path_wobble(svg: str) -> float:
+    """Wobble of an SVG's contours: angle sign-flips per unit length over its polylines.
+
+    Rasterization-free structural measure of polyline jitter — high when a contour
+    zig-zags (raw quantized-pixel edges), low when it is a clean curve (after smoothing).
+    Mirrors the line-quality jitter metric so the smooth gate can reward genuine wobble
+    removal that raw SSIM (which rewards the antialiased staircase) penalises.
+    """
+    import math
+    import re
+    import xml.etree.ElementTree as ET
+
+    num = r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
+    try:
+        root = ET.fromstring(svg)
+    except ET.ParseError:
+        return 0.0
+    flips = 0.0
+    length = 0.0
+    for el in root.iter():
+        if el.tag.rsplit("}", 1)[-1] != "path":
+            continue
+        toks = re.findall(r"[MmLlCcQqZzHhVv]|" + num, el.attrib.get("d", ""))
+        pts: list[list[float]] = []
+        subs: list[np.ndarray] = []
+        cur = [0.0, 0.0]
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t in "Mm":
+                if pts:
+                    subs.append(np.array(pts))
+                    pts = []
+                x, y = float(toks[i + 1]), float(toks[i + 2])
+                cur = [x, y] if t == "M" else [cur[0] + x, cur[1] + y]
+                pts = [cur[:]]
+                i += 3
+            elif t in "Ll":
+                x, y = float(toks[i + 1]), float(toks[i + 2])
+                cur = [x, y] if t == "L" else [cur[0] + x, cur[1] + y]
+                pts.append(cur[:])
+                i += 3
+            elif t in "Cc":
+                c = [float(v) for v in toks[i + 1 : i + 7]]
+                cur = [c[4], c[5]] if t == "C" else [cur[0] + c[4], cur[1] + c[5]]
+                pts.append(cur[:])
+                i += 7
+            elif t in "Qq":
+                c = [float(v) for v in toks[i + 1 : i + 5]]
+                cur = [c[2], c[3]] if t == "Q" else [cur[0] + c[2], cur[1] + c[3]]
+                pts.append(cur[:])
+                i += 5
+            else:
+                i += 1
+        if pts:
+            subs.append(np.array(pts))
+        for poly in subs:
+            if len(poly) < 4:
+                continue
+            seg = np.diff(poly, axis=0)
+            seg_len = np.hypot(seg[:, 0], seg[:, 1])
+            ang = np.arctan2(seg[:, 1], seg[:, 0])
+            if len(ang) <= 2:
+                continue
+            da = np.diff(ang)
+            da = (da + np.pi) % (2 * np.pi) - np.pi
+            small = np.abs(da) < math.radians(40)
+            flip = np.sign(da[:-1]) != np.sign(da[1:])
+            flips += float(np.sum(small[:-1] & flip))
+            length += float(seg_len.sum())
+    return 100.0 * flips / max(length, 1.0)
 
 
 @dataclass(frozen=True)
@@ -326,7 +457,18 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             reference = load_image(image, "RGB")
             smoothed = smooth_svg(svg)
             smoothed_score = score(reference, rasterize(smoothed, reference.size))
-            if smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE:
+            keep = smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE
+            # Wobble-relief escape clause: raw SSIM rewards the antialiased staircase, so a
+            # visibly-sharper smooth can dip past the plain tolerance on the wobbliest inputs.
+            # Recover those by measuring path wobble directly (SSIM is blind to it): if
+            # smoothing genuinely straightens the contours and SSIM stays within the wider
+            # hard floor, keep it. The floor still vetoes a true feature loss (huge SSIM drop).
+            if not keep and smoothed_score >= result.best_score - _SMOOTH_SSIM_HARD_FLOOR:
+                raw_wobble = _path_wobble(svg)
+                if raw_wobble > 0.0:
+                    relief = (raw_wobble - _path_wobble(smoothed)) / raw_wobble
+                    keep = relief >= _SMOOTH_WOBBLE_RELIEF
+            if keep:
                 svg, similarity = smoothed, smoothed_score
         return svg, similarity, result.iterations
 
@@ -370,9 +512,42 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                 coverage_dark_thin=opts.illustration_dark_thin,
             )
         cov_class = classification._replace(preset="continuous")
-        svg, similarity, iterations = render(
+        # Dark-outline black snap (#lever-C): collapse scattered near-black tints into one clean
+        # #000000 outline layer. Only engage when there is genuine near-black mass (so no-black art
+        # is untouched and pays no extra render); then SSIM-guard against the no-snap trace so a
+        # dark-but-not-black-detail image can never regress.
+        snap_black = _COVERAGE_BLACK_SNAP_DE > 0.0 and _has_black_outline(image)
+        base_svg, base_sim, base_iters = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
+        if snap_black:
+            # Palette-build snap gives the tracer a clean pure-black core; the output-side
+            # fill snap then collapses the tints the colour tracer re-derives along the
+            # anti-aliased outline edges into one #000000 layer. SSIM-guarded: keep the
+            # snapped result only when it does not cost more than the tolerance vs the
+            # un-snapped trace, so a dark-but-not-black-detail image can never regress.
+            snap_pre = replace(
+                cov_pre,
+                coverage_black_snap=_COVERAGE_BLACK_SNAP_DE,
+                coverage_black_snap_min_area=_COVERAGE_BLACK_SNAP_MIN_AREA,
+            )
+            snap_svg, snap_sim, snap_iters = render(
+                snap_pre, cov_class, palette_threshold=0.0, max_iters=1
+            )
+            snap_svg = snap_dark_fills(snap_svg, _COVERAGE_BLACK_SNAP_DE)
+            snap_sim = score(
+                load_image(image, "RGB"), rasterize(snap_svg, load_image(image, "RGB").size)
+            )
+            # Keep the snap only when it both holds SSIM AND actually cleans the dark layer
+            # (never inflates the distinct-dark-fill count) — a sharper black core can make the
+            # colour tracer carve MORE edge tints on some inputs, the opposite of the goal.
+            cleaner = _distinct_dark_fills(snap_svg) <= _distinct_dark_fills(base_svg)
+            if base_sim - snap_sim <= _COVERAGE_BLACK_SNAP_SSIM_DROP and cleaner:
+                svg, similarity, iterations = snap_svg, snap_sim, snap_iters
+            else:
+                svg, similarity, iterations = base_svg, base_sim, base_iters
+        else:
+            svg, similarity, iterations = base_svg, base_sim, base_iters
         # Path cap = misgated-photo blowup guard. At --detail high the user opted into
         # max fidelity, so a high count is INTENDED for legitimately grainy/painterly art
         # (the reference traces such inputs into thousands of micro-tiles) — raise the cap
