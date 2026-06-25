@@ -247,3 +247,34 @@ def test_snap_dark_fills_collapses_near_black_to_one_layer():
     assert "#0a0a0a" not in fills and "#050505" not in fills  # both darks merged
     # de<=0 disables the pass entirely (byte-identical)
     assert snap_dark_fills(svg, de=0.0) == svg
+
+
+def test_global_same_fill_merge_collapses_fragmented_fills():
+    """Phase 3 flat-economy: same-fill fragments hoist into one <path> per fill (fewer
+    paths, same pixels); a non-repeating palette is returned unchanged (nothing to merge)."""
+    from svgsmith.postprocess import global_same_fill_merge
+
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 10 10">'
+        '<path fill="#ff0000" d="M0 0 L1 0 L1 1 Z"/>'
+        '<path fill="#ff0000" d="M2 2 L3 2 L3 3 Z"/>'  # same fill, fragmented
+        '<path fill="#00ff00" d="M5 5 L6 5 L6 6 Z"/>'
+        "</svg>"
+    )
+    out = global_same_fill_merge(svg)
+    root = ET.fromstring(out)
+    paths = [p for p in root.iter(f"{{{SVG_NS}}}path")]
+    fills = [p.get("fill") for p in paths]
+    assert len(paths) == 2  # the two reds collapsed into one, green stays
+    assert fills.count("#ff0000") == 1 and "#00ff00" in fills
+    red = next(p for p in paths if p.get("fill") == "#ff0000")
+    assert red.get("d").count("M") == 2  # both red subpaths preserved in the merged path
+
+    # All-unique palette: nothing to merge → returned unchanged.
+    uniq = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 10 10">'
+        '<path fill="#ff0000" d="M0 0 L1 0 L1 1 Z"/>'
+        '<path fill="#00ff00" d="M2 2 L3 2 L3 3 Z"/>'
+        "</svg>"
+    )
+    assert global_same_fill_merge(uniq) == uniq

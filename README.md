@@ -84,6 +84,10 @@ svgsmith convert path/to/image.png --out out.svg --report json
   fringes, so illustrations come out clean and editable without losing their character or
   ballooning in size. `--detail high` additionally preserves subtle painterly brush-grain
   for heavily textured art.
+- **Crisp, high-resolution lines** — low-resolution flat cartoon art (e.g. a 640px JPEG) is
+  auto-traced on a supersampled grid, so outlines and curves come out smooth instead of
+  staircased on the native pixel grid, while same-color fragments are merged back so the path
+  count stays economical. Applied only to that class; `--hires` forces it on any input.
 - **Editable output** — instead of one monolithic `<path>`, output is grouped into
   `<g>` layers with simplified paths and a consolidated color palette.
 - **Self-verifying** — converts, re-rasterizes, diffs against the original (SSIM), and
@@ -125,6 +129,7 @@ svgsmith convert input.png \
 | `--editable` / `--no-editable` | on | Editable grouped/simplified SVG, or the raw traced output. |
 | `--smooth` / `--no-smooth` | on | Curve-refit color contours into smooth, sparse Béziers (Schneider least-squares). |
 | `--detail {high,normal,clean,poster}` | `normal` | Color detail dial. `high` = maximum detail, preserving fine texture / painterly brush-grain; `normal` = faithful but economical (keeps deliberate detail, drops anti-alias fringes); `clean` = edge-preserving cleanup (less noise/grain); `poster` = bold flat graphic with few colors. |
+| `--hires` | off | Force the high-resolution supersampled trace (crisp, smooth lines) on any color input. Low-res flat illustrations get it automatically; `--hires` forces it on textured/large art too (more paths/bytes, slower). |
 | `--solid-background` | off | Isolate the subject and repaint the background as one clean solid color — removes texture/grain/specks while keeping subject detail. |
 | `--background COLOR` | off | Like `--solid-background`, but repaint the detected background to a **specific** color (`#RRGGBB` or named, e.g. `white`). `auto` = the detected median. |
 | `--transparent-background` | off | **Remove** the background instead of repainting it — the edge-connected background is cut, leaving a **transparent** SVG. The subject is kept even where it shares the background color (color mode). |

@@ -772,6 +772,43 @@ def snap_dark_fills(svg_str: str, de: float) -> str:
     return re.sub(r'fill="(#[0-9a-fA-F]{3,6})"', _swap, svg_str)
 
 
+def global_same_fill_merge(svg_str: str, precision: int = 2) -> str:
+    """Hoist every path of a given fill into ONE ``<path>`` at that fill's top-most
+    paint index.
+
+    Supersampling a flat-colour region fragments it into many same-fill paths (a clean
+    solid area becomes a spray of tiles), inflating the path/byte count for zero fidelity
+    gain. This collapses each colour's fragments back into a single compound path. It is
+    LOSSLESS only when same-fill regions tile without a *different* fill painting between
+    and over them (true for flat/poster art) — hoisting reorders paint, so the CALLER
+    MUST SSIM-verify the result and fall back on a drop. Bails (returns the input) when any
+    path carries a non-translate transform (baking would break a scaled/flipped shape) or
+    when every fill is already unique (nothing to merge).
+    """
+    root = ET.fromstring(svg_str)
+    paths = _collect_paths(root)
+    if not paths:
+        return svg_str
+    groups: dict[str, dict] = {}
+    for idx, path in enumerate(paths):
+        if not _is_translate_only(path["transform"]):
+            return svg_str
+        fill = path["fill"] or "none"
+        group = groups.get(fill)
+        if group is None:
+            group = groups[fill] = {"max_idx": idx, "subs": []}
+        group["max_idx"] = idx
+        group["subs"].extend(_baked_subpaths(path))
+    if len(groups) == len(paths):
+        return svg_str  # no fill repeats — nothing to collapse
+    merged: list[dict] = []
+    for fill, group in sorted(groups.items(), key=lambda kv: kv[1]["max_idx"]):
+        d = _emit_d(group["subs"], precision)
+        if d:
+            merged.append({"fill": None if fill == "none" else fill, "d": d, "transform": ""})
+    return _build_svg(root, merged, group=False, precision=precision, merge_fill_runs=False)
+
+
 def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, float] | None:
     """Overall geometry bounding box ``(minx, miny, maxx, maxy)``, or None."""
     root = ET.fromstring(svg_str)
