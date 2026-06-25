@@ -549,8 +549,13 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         # Dark-outline black snap (#lever-C): collapse scattered near-black tints into one clean
         # #000000 outline layer. Only engage when there is genuine near-black mass (so no-black art
         # is untouched and pays no extra render); then SSIM-guard against the no-snap trace so a
-        # dark-but-not-black-detail image can never regress.
-        snap_black = _COVERAGE_BLACK_SNAP_DE > 0.0 and _has_black_outline(image)
+        # dark-but-not-black-detail image can never regress. SKIPPED when supersampling: at high res
+        # the sharper black core makes the colour tracer carve MORE edge tints, so the cleaner-guard
+        # rejects the snap anyway — running it just pays for a second full-res trace for nothing
+        # (verified byte-identical output at half the time on the flat low-res class).
+        snap_black = (
+            _COVERAGE_BLACK_SNAP_DE > 0.0 and not did_supersample and _has_black_outline(image)
+        )
         base_svg, base_sim, base_iters = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
