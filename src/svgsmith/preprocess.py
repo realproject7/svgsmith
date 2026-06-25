@@ -95,6 +95,17 @@ class PreprocessOptions:
     # tone — a target for the daily quality loop to refine.
     coverage_dark_thin: int = 0
     coverage_dark_protect: float = 0.0006
+    # Dark-outline black snap (#lever-C; 0 = OFF = unchanged): outlined-cartoon JPEGs scatter the
+    # dark linework across many near-black tints (the pigeon: 186 dark colours), bloating paths and
+    # giving a ragged variable-width outline. When >0, every pixel within ``coverage_black_snap``
+    # (ΔE76) of pure black is pulled OUT of the coverage palette build and painted as ONE clean
+    # #000000 region, so the outline becomes a single black layer. Bounded by construction (a
+    # snapped pixel moves at most ``coverage_black_snap`` ΔE). Self-gating: it only fires when the
+    # near-black mass is at least ``coverage_black_snap_min_area`` of the image, so no-black art
+    # (e.g. a pure-pastel illustration) is left byte-identical. NO morphology — just a luma/chroma
+    # threshold snap + palette exclusion (erosion was verified to regress outline IoU).
+    coverage_black_snap: float = 0.0
+    coverage_black_snap_min_area: float = 0.004  # min near-black share before the snap activates
 
     solid_background: bool = False  # replace the background with one clean solid color
     background_tolerance: int = 32  # per-channel tolerance for the edge-flood-fill bg region
@@ -482,6 +493,8 @@ def quantize_coverage(
     region_noise_de: float = 0.0,
     dark_thin: int = 0,
     dark_protect: float = 0.0006,
+    black_snap: float = 0.0,
+    black_snap_min_area: float = 0.004,
     denoise_lossy: bool = False,
     denoise_sigma_color: float = 0.02,
     denoise_sigma_spatial: float = 1.5,
@@ -510,6 +523,18 @@ def quantize_coverage(
     rgb = rgba[:, :, :3].reshape(-1, 3).astype(np.float64)
     lab = rgb2lab(rgba[:, :, :3] / 255.0).reshape(-1, 3)
 
+    # Dark-outline black snap (#lever-C): pull every pixel within ``black_snap`` (ΔE76) of pure
+    # black OUT of the palette build and paint it one clean #000000 region, so scattered near-black
+    # tints collapse to a single outline layer. ΔE to pure black is just the LAB norm (pure black
+    # is the LAB origin). Self-gating: only fire when the near-black share clears
+    # ``black_snap_min_area`` so no-black art is untouched (a snapped pixel moves at most
+    # ``black_snap`` ΔE).
+    black_mask = None
+    if black_snap > 0.0:
+        cand = np.linalg.norm(lab, axis=1) <= black_snap
+        if cand.mean() >= black_snap_min_area:
+            black_mask = cand
+
     # Weighted histogram over 1-unit LAB bins (cheap, resolution-independent work set).
     # Encode each (L, a, b) bin into one integer key (L highest-order) so the dedup is a
     # 1-D ``np.unique`` instead of ``unique(..., axis=0)``'s lexsort — the dominant cost
@@ -533,16 +558,29 @@ def quantize_coverage(
     bin_rgb_sum = np.zeros((len(bins), 3))
     np.add.at(bin_rgb_sum, inverse, rgb)
 
+    # Exclude the near-black bins from the palette build so the greedy never spends budget
+    # carving the outline into many tints. A bin counts as black when its center is within
+    # ``black_snap`` of the LAB origin (matches the per-pixel test). Their pixels are repainted
+    # pure black at the end via ``black_mask``; here we zero their weight and keep them out of
+    # the leftover/speckle bookkeeping by pre-assigning a sentinel.
+    black_bin = (
+        np.linalg.norm(binf, axis=1) <= black_snap
+        if black_mask is not None
+        else np.zeros(len(bins), dtype=bool)
+    )
+
     assigned = np.full(len(bins), -1, dtype=np.int64)
     centers_lab: list[np.ndarray] = []
     remaining = counts.astype(np.float64).copy()
+    remaining[black_bin] = 0.0  # never selected as / absorbed into a coverage anchor
+    cover_total = float(remaining.sum()) or total  # coverage budget over the non-black mass
     covered = 0.0
-    while covered < coverage * total and len(centers_lab) < max_colors:
+    while covered < coverage * cover_total and len(centers_lab) < max_colors:
         idx = int(np.argmax(remaining))
         if remaining[idx] <= 0:
             break
         center = binf[idx]
-        within = (np.linalg.norm(binf - center, axis=1) <= step) & (assigned < 0)
+        within = (np.linalg.norm(binf - center, axis=1) <= step) & (assigned == -1) & ~black_bin
         ci = len(centers_lab)
         assigned[within] = ci
         centers_lab.append(center)
@@ -553,9 +591,18 @@ def quantize_coverage(
         return img
     centers = np.array(centers_lab)
     # Tail colours beyond the coverage budget snap to their nearest palette entry.
-    leftover = np.where(assigned < 0)[0]
+    leftover = np.where((assigned == -1) & ~black_bin)[0]
     for bi in leftover:
         assigned[bi] = int(np.argmin(np.linalg.norm(centers - binf[bi], axis=1)))
+
+    # The near-black bins become ONE dedicated palette entry, kept out of the coverage build
+    # above so the outline is a single clean layer instead of many scattered tints. Its
+    # representative is forced to pure black at the end (rep-mean would drift to dark grey).
+    black_entry = -1
+    if black_bin.any():
+        black_entry = len(centers)
+        centers = np.vstack([centers, np.zeros((1, 3))])
+        assigned[black_bin] = black_entry
 
     # Representative RGB per palette entry = mean RGB of its pixels.
     n = len(centers)
@@ -579,6 +626,11 @@ def quantize_coverage(
         np.add.at(rep_sum, assigned, bin_rgb_sum)
         np.add.at(rep_cnt, assigned, counts)
         rep_rgb = np.divide(rep_sum, np.maximum(rep_cnt[:, None], 1.0))
+
+    # Force the dedicated outline entry to pure #000000 (the rep-mean of near-black pixels
+    # would otherwise land on a dark grey, defeating the single-clean-black-layer goal).
+    if black_entry >= 0:
+        rep_rgb[black_entry] = 0.0
 
     pixel_palette = assigned[inverse]  # palette index per pixel (flat)
 
@@ -782,6 +834,8 @@ def preprocess(image: ImageInput, opts: PreprocessOptions | None = None) -> Imag
                 region_noise_de=opts.coverage_region_noise_de,
                 dark_thin=opts.coverage_dark_thin,
                 dark_protect=opts.coverage_dark_protect,
+                black_snap=opts.coverage_black_snap,
+                black_snap_min_area=opts.coverage_black_snap_min_area,
                 denoise_lossy=lossy_coverage,
                 denoise_sigma_color=opts.coverage_denoise_sigma_color,
                 denoise_sigma_spatial=opts.coverage_denoise_sigma_spatial,

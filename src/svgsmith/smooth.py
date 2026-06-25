@@ -237,6 +237,35 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return v / n if n > 1e-6 else np.zeros(2)
 
 
+def _axis_snap(start: np.ndarray, end: np.ndarray, snap_deg: float, max_drift: float):
+    """Snap an already-straight segment's direction to the nearest 0/45/90/135 axis.
+
+    VTracer copies straight-run endpoints verbatim, so a "horizontal" edge inherits
+    a few degrees of pixel tilt and reads as 1px stair-creep. If the segment from
+    ``start`` to ``end`` lies within ``snap_deg`` of an exact axis, rotate ``end``
+    onto that axis about ``start`` (preserving the segment length so the contour does
+    not shrink). Returns ``(snapped_end, drift)`` where ``drift`` is how far the
+    endpoint moved; the caller refuses the snap if it would exceed ``max_drift`` so
+    error cannot accumulate over a long contour. Genuine off-axis diagonals (angle
+    error > ``snap_deg``) and true curves (never routed here) are left untouched.
+    """
+    v = end - start
+    length = math.hypot(v[0], v[1])
+    if length < 1e-6:
+        return end, 0.0
+    ang = math.degrees(math.atan2(v[1], v[0]))
+    nearest = round(ang / 45.0) * 45.0  # closest of 0/45/90/135/180/-45/...
+    err = ang - nearest
+    if abs(err) > snap_deg:
+        return end, 0.0  # genuine off-axis diagonal: leave it
+    rad = math.radians(nearest)
+    snapped = start + length * np.array([math.cos(rad), math.sin(rad)])
+    drift = float(math.hypot(snapped[0] - end[0], snapped[1] - end[1]))
+    if drift > max_drift:
+        return end, 0.0
+    return snapped, drift
+
+
 def _fit_arc(arc: np.ndarray, tol: float) -> list[np.ndarray]:
     """Fit an open arc with Schneider cubics; tangents from the arc ends."""
     t_left = _unit(arc[1] - arc[0])
@@ -258,6 +287,8 @@ def _smooth_d(
     pts_per_100: float,
     corner_deg: float,
     straight_tol: float,
+    snap_deg: float,
+    max_drift: float,
     samples: int,
     precision: int,
 ) -> str:
@@ -298,8 +329,9 @@ def _smooth_d(
         corners = sorted(splits)
         if len(corners) < 2:
             corners = [0, len(rs) // 2]
-        sub_chunks = [f"M{fmt(rs[corners[0]])}"]
-        contour = [rs[corners[0]]]  # sampled smoothed outline, for the fidelity check
+        pen = rs[corners[0]].astype(float)  # snapped pen position (propagates exactly)
+        sub_chunks = [f"M{fmt(pen)}"]
+        contour = [pen.copy()]  # sampled smoothed outline, for the fidelity check
         for j in range(len(corners)):
             a, b = corners[j], corners[(j + 1) % len(corners)]
             if b > a:
@@ -308,13 +340,19 @@ def _smooth_d(
                 idx = list(range(a, len(rs))) + list(range(0, b + 1))
             arc = rs[idx]
             if len(arc) < 3 or _max_deviation(arc) <= straight_tol:
-                sub_chunks.append(f"L{fmt(arc[-1])}")  # straight edge stays crisp
-                contour.append(arc[-1])
+                # Already classified straight: snap its angle to the nearest exact
+                # axis (H/V/diagonal) and carry the snapped endpoint forward as the
+                # pen so the next segment stays connected (no seam).
+                end = _axis_snap(pen, arc[-1].astype(float), snap_deg, max_drift)[0]
+                sub_chunks.append(f"L{fmt(end)}")  # straight edge stays crisp
+                contour.append(end)
+                pen = end
             else:
                 # Light per-arc denoise (endpoints/corners pinned) then fit.
                 for ctrl in _fit_arc(_gaussian(arc, sigma), tol):
                     sub_chunks.append(f"C{fmt(ctrl[1])} {fmt(ctrl[2])} {fmt(ctrl[3])}")
                     contour.extend(_bezier_point(ctrl, t) for t in (0.25, 0.5, 0.75, 1.0))
+                    pen = np.asarray(ctrl[3], dtype=float)
         # Per-feature fidelity guard: if smoothing changed the enclosed area too much
         # (it filled a concavity — e.g. averaged across a mouth 'W' into a blob), keep
         # the crisp raw geometry instead. Protects small concave features the global
@@ -352,6 +390,8 @@ def smooth_svg(
     pts_per_100: float = 8.0,
     corner_deg: float = 42.0,
     straight_tol_ratio: float = 0.0016,
+    snap_deg: float = 10.0,
+    max_drift_ratio: float = 0.012,
     samples: int = 6,
     precision: int = 2,
 ) -> str:
@@ -366,6 +406,7 @@ def smooth_svg(
     tol = (tol_ratio * diag) ** 2  # _max_error works in squared distance
     min_perim = min_perim_ratio * diag
     straight_tol = straight_tol_ratio * diag
+    max_drift = max_drift_ratio * diag
     for path in root.iter(f"{{{SVG_NS}}}path"):
         d = path.get("d")
         if d:
@@ -379,6 +420,8 @@ def smooth_svg(
                     pts_per_100=pts_per_100,
                     corner_deg=corner_deg,
                     straight_tol=straight_tol,
+                    snap_deg=snap_deg,
+                    max_drift=max_drift,
                     samples=samples,
                     precision=precision,
                 ),

@@ -226,3 +226,24 @@ def test_snap_background_layer_is_noop_without_a_full_canvas_background():
     )
     ds = _all_path_ds(snap_background_layer(svg))
     assert all(not d.startswith("M0 0L100 0") for d in ds)
+
+
+def test_snap_dark_fills_collapses_near_black_to_one_layer():
+    """#lever-C output side: every fill within ΔE of pure black collapses to one #000000;
+    non-dark fills and (de<=0) are untouched — so it is a no-op on art with no near-black."""
+    from svgsmith.postprocess import snap_dark_fills
+
+    svg = (
+        f'<svg xmlns="{SVG_NS}" width="10" height="10">'
+        '<path d="M0 0 L1 0 L1 1 Z" fill="#0a0a0a"/>'  # near-black tint
+        '<path d="M2 2 L3 2 L3 3 Z" fill="#050505"/>'  # near-black tint
+        '<path d="M5 5 L6 5 L6 6 Z" fill="#ff0000"/>'  # bright, must survive
+        "</svg>"
+    )
+    out = snap_dark_fills(svg, de=12.0)
+    fills = _fill_colors(out)
+    assert "#000000" in fills
+    assert "#ff0000" in fills
+    assert "#0a0a0a" not in fills and "#050505" not in fills  # both darks merged
+    # de<=0 disables the pass entirely (byte-identical)
+    assert snap_dark_fills(svg, de=0.0) == svg

@@ -744,6 +744,34 @@ def drop_background_paths(svg_str: str, bg_mask: np.ndarray) -> str:
     return _build_svg(root, kept, True)
 
 
+_BLACK = "#000000"
+
+
+def snap_dark_fills(svg_str: str, de: float) -> str:
+    """Collapse every near-pure-black fill in the SVG to a single clean ``#000000``.
+
+    The dark-outline black snap (#lever-C) pulls near-black pixels out of the coverage
+    palette build, but the colour tracer re-derives fills from the image and re-introduces
+    a spray of near-black tints along the anti-aliased outline edges. This is the matching
+    output-side step: every fill within ``de`` (CIE76 ΔE) of pure black is rewritten to one
+    ``#000000``, so the linework becomes a single black layer instead of hundreds of tints.
+
+    Surgical string rewrite of the ``fill`` attribute only — geometry, ordering and every
+    non-dark fill are left byte-identical, so the result is a no-op on art with no near-black
+    fills. ``de <= 0`` disables it.
+    """
+    if de <= 0.0:
+        return svg_str
+
+    def _swap(match: re.Match[str]) -> str:
+        hex_color = _normalize_hex(match.group(1))
+        if hex_color and hex_color != _BLACK and _color_distance(hex_color, _BLACK) <= de:
+            return f'fill="{_BLACK}"'
+        return match.group(0)
+
+    return re.sub(r'fill="(#[0-9a-fA-F]{3,6})"', _swap, svg_str)
+
+
 def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, float] | None:
     """Overall geometry bounding box ``(minx, miny, maxx, maxy)``, or None."""
     root = ET.fromstring(svg_str)
