@@ -58,6 +58,7 @@ def _convert(args: argparse.Namespace) -> int:
         transparent_background=args.transparent_background,
         flatten_shading=args.flatten_shading,
         detail=args.detail,
+        hires=args.hires,
         out=args.out,
     )
 
@@ -204,6 +205,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Color detail dial (default: normal). high = maximum detail; "
             "clean = edge-preserving cleanup, less noise; poster = bold flat graphic, "
             "few colors."
+        ),
+    )
+    convert.add_argument(
+        "--hires",
+        action="store_true",
+        default=False,
+        help=(
+            "Force the high-resolution trace (supersample the mask) for crisp, smooth "
+            "lines on ANY color input. Low-resolution flat illustrations get this "
+            "automatically; --hires forces it on textured or already-large art too "
+            "(more paths/bytes, slower)."
         ),
     )
     convert.add_argument(

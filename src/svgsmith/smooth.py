@@ -381,6 +381,47 @@ def _diagonal(root: ET.Element) -> float:
     return math.hypot(_len(root.get("width")), _len(root.get("height"))) or 1000.0
 
 
+def _viewbox_long_edge(root: ET.Element) -> float:
+    vb = root.get("viewBox")
+    if vb:
+        parts = [float(v) for v in vb.replace(",", " ").split()]
+        if len(parts) == 4:
+            return max(parts[2], parts[3])
+    return 0.0
+
+
+def _resolution_precision(
+    root: ET.Element, native_long_edge: int, precision: int | None
+) -> int:
+    """Choose lossless output decimals for the (possibly supersampled) viewBox.
+
+    The supersample factor is ``viewBox_long_edge / native_long_edge``, so 1 viewBox unit
+    spans ``1/factor`` of a *native* pixel. A coordinate rounded to ``10**-d`` viewBox units
+    therefore moves at most ``10**-d / factor`` native pixels; keeping that step ≤ ~½ a
+    native pixel is visually lossless. Solving ``10**-d / factor <= 0.5`` gives
+    ``d >= log10(2 / factor)``, so the smallest lossless decimal count is
+    ``max(0, ceil(log10(2 / factor)))`` — for the 2-4× supersample factors this is 0, but
+    we clamp to ``min(base, …)`` so the lever only ever *removes* decimals (saves bytes),
+    never adds them. Empirically ``.1f`` is exactly lossless at 2.4-3× and ``.0f`` costs
+    ≤0.0005 SSIM; we keep one guard decimal over the theoretical floor by clamping to
+    ``base`` and letting the render-verified smooth gate catch any regression.
+    ``precision`` None starts from 2; an unknown native size returns ``precision``.
+    """
+    base = 2 if precision is None else precision
+    if native_long_edge <= 0:
+        return base
+    long_edge = _viewbox_long_edge(root)
+    if long_edge <= native_long_edge:
+        return base
+    factor = long_edge / float(native_long_edge)
+    # Lossless floor is max(0, ceil(log10(2/factor))); we keep ONE guard decimal above it
+    # (so 2-4× lands .1f, the render-verified-lossless point, not the riskier .0f).
+    if factor <= 0:
+        return base
+    raw_floor = int(math.ceil(math.log10(2.0 / factor)))  # may be negative at high factor
+    return max(0, min(base, raw_floor + 1))
+
+
 def smooth_svg(
     svg: str,
     *,
@@ -393,16 +434,27 @@ def smooth_svg(
     snap_deg: float = 10.0,
     max_drift_ratio: float = 0.012,
     samples: int = 6,
-    precision: int = 2,
+    precision: int | None = 2,
+    native_long_edge: int = 0,
 ) -> str:
     """Return ``svg`` with every path's geometry curve-refit for smooth, sparse Béziers.
 
     ``tol_ratio`` / ``min_perim_ratio`` / ``straight_tol_ratio`` are fractions of the
     viewBox diagonal, so behavior is independent of canvas size. ``tol_ratio`` is the
     Bézier fit error budget — larger means fewer, smoother curves.
+
+    Coordinate precision is *resolution-aware* (the lossless supersample byte lever).
+    ``precision`` decimals are emitted at native scale, but when the SVG was traced on a
+    supersampled mask its viewBox is N× the native pixel grid, so two ``.2f`` decimals
+    there resolve ~Nx finer than the original pixels ever could — pure byte bloat. When
+    ``native_long_edge`` is known we drop the decimal count by ``log10(supersample factor)``
+    so the absolute coordinate granularity tracks the *native* grid, not the inflated one
+    (e.g. a 640px image traced at 2048 ≈ 3.2×, so ``.2f`` → ``.1f`` losslessly). Pass
+    ``precision=None`` to auto-pick purely from the factor.
     """
     root = ET.fromstring(svg)
     diag = _diagonal(root)
+    precision = _resolution_precision(root, native_long_edge, precision)
     tol = (tol_ratio * diag) ** 2  # _max_error works in squared distance
     min_perim = min_perim_ratio * diag
     straight_tol = straight_tol_ratio * diag

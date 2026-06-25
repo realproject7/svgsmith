@@ -15,7 +15,12 @@ from PIL import Image
 
 from svgsmith.classify import Classification, classify
 from svgsmith.engines.base import ImageInput, load_image
-from svgsmith.postprocess import drop_background_paths, snap_background_layer, snap_dark_fills
+from svgsmith.postprocess import (
+    drop_background_paths,
+    global_same_fill_merge,
+    snap_background_layer,
+    snap_dark_fills,
+)
 from svgsmith.preprocess import PreprocessOptions, _edge_flood_fill_mask, preprocess
 from svgsmith.report import Report, svg_stats
 from svgsmith.smooth import smooth_svg
@@ -47,6 +52,13 @@ COVERAGE_NOISE_DE = {"high": 5.0, "normal": 13.0, "clean": 18.0, "poster": 26.0}
 # anchor snaps each region to one clean color and keeps the outline pure black.
 # K scales with detail so a genuinely rich illustration is not crushed at "high".
 _TRACE_RESOLUTION = 2048
+# Auto/--hires supersample target long-edge (line-quality Phase 3): the loop-validated minimum
+# that lifts a sub-768px input off the native pixel staircase (subpixel grid + SSIM gain) without
+# the heavier cost of the full reference-grid factor. Paired with an uncapped region merge so the
+# flat-economy levers can claw the high-res path blow-up back toward reference counts.
+_SUPERSAMPLE_AUTO_RES = 1536
+_SUPERSAMPLE_REGION_MAX_PX = 20000  # uncap the region merge at high res (native cap is 2000)
+_SAME_FILL_MERGE_SSIM_DROP = 0.01  # gate: keep the same-fill merge only within this SSIM cost
 # Only low-resolution color inputs get the supersample + k-means treatment;
 # already-large clean art traces smoothly on the proven path and upscaling it
 # just bloats node count (a 1024px PNG shiba regresses 95→219 paths if upscaled).
@@ -303,6 +315,13 @@ class ConvertOptions:
     # resolution) so thick outline blobs become thin crescents (small dark detail is protected).
     illustration_supersample: int = 0
     illustration_dark_thin: int = 0
+    # Resolution lever (line-quality Phase 3): trace a supersampled mask so curves are fit on
+    # a fine grid (crisp, high-resolution lines) instead of the native pixel staircase. AUTO for
+    # flat low-resolution illustrations (the ``_supersample_candidate`` class — e.g. a 640px JPEG
+    # cartoon that traces staircased); ``hires`` FORCES it on any color input (textured/high-res
+    # too, where the same-fill economy may not apply so it just costs more paths). Gradients,
+    # photos and already-high-res inputs are untouched.
+    hires: bool = False
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -455,7 +474,11 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         similarity = result.best_score
         if opts.smooth and opts.editable and is_color:
             reference = load_image(image, "RGB")
-            smoothed = smooth_svg(svg)
+            # Lossless supersample byte lever: when the mask was traced above native
+            # resolution the viewBox is N× the native grid, so default .2f coordinates
+            # resolve far finer than the original pixels — pure byte bloat. smooth_svg
+            # auto-drops decimals by log10(factor) so granularity tracks the native grid.
+            smoothed = smooth_svg(svg, native_long_edge=max(reference.size))
             smoothed_score = score(reference, rasterize(smoothed, reference.size))
             keep = smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE
             # Wobble-relief escape clause: raw SSIM rewards the antialiased staircase, so a
@@ -500,23 +523,39 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         # Other levels keep the flatten (the loop-validated economical default).
         if opts.detail == "high":
             cov_pre = replace(cov_pre, flatten=False)
-        # Illustration-geometry knobs (experimental, loop-tuned): supersample the flat-colour
-        # mask for round/uniform scallop boundaries, and/or thin the dark linework into crescents.
-        # Applied ONLY to the outlined low-res illustration class and ONLY when requested, so the
-        # default path and gradients/photos are untouched.
-        want_geometry = opts.illustration_supersample or opts.illustration_dark_thin
-        if want_geometry and _supersample_candidate(image):
+        # Resolution lever (line-quality Phase 3): supersample the flat-colour mask so curves are
+        # fit on a fine grid (crisp, high-resolution lines) instead of the native pixel staircase.
+        # AUTO for the flat low-res illustration class (``_supersample_candidate`` — e.g. a 640px
+        # JPEG cartoon that traces staircased); FORCED by ``--hires``; or set explicitly by the
+        # experimental illustration knob. When supersampling, uncap the region merge (the 2000px
+        # cap throttles consolidation at high res) so the flat-economy levers can claw the path
+        # blow-up back down. Gradients, photos and already-high-res inputs never enter here.
+        ss_res = opts.illustration_supersample or (
+            _SUPERSAMPLE_AUTO_RES if (_supersample_candidate(image) or opts.hires) else 0
+        )
+        did_supersample = bool(ss_res)
+        if did_supersample or opts.illustration_dark_thin:
             cov_pre = replace(
                 cov_pre,
-                trace_resolution=opts.illustration_supersample or cov_pre.trace_resolution,
+                trace_resolution=ss_res or cov_pre.trace_resolution,
                 coverage_dark_thin=opts.illustration_dark_thin,
+                coverage_region_max_px=(
+                    _SUPERSAMPLE_REGION_MAX_PX
+                    if did_supersample
+                    else cov_pre.coverage_region_max_px
+                ),
             )
         cov_class = classification._replace(preset="continuous")
         # Dark-outline black snap (#lever-C): collapse scattered near-black tints into one clean
         # #000000 outline layer. Only engage when there is genuine near-black mass (so no-black art
         # is untouched and pays no extra render); then SSIM-guard against the no-snap trace so a
-        # dark-but-not-black-detail image can never regress.
-        snap_black = _COVERAGE_BLACK_SNAP_DE > 0.0 and _has_black_outline(image)
+        # dark-but-not-black-detail image can never regress. SKIPPED when supersampling: at high res
+        # the sharper black core makes the colour tracer carve MORE edge tints, so the cleaner-guard
+        # rejects the snap anyway — running it just pays for a second full-res trace for nothing
+        # (verified byte-identical output at half the time on the flat low-res class).
+        snap_black = (
+            _COVERAGE_BLACK_SNAP_DE > 0.0 and not did_supersample and _has_black_outline(image)
+        )
         base_svg, base_sim, base_iters = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
@@ -548,6 +587,17 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                 svg, similarity, iterations = base_svg, base_sim, base_iters
         else:
             svg, similarity, iterations = base_svg, base_sim, base_iters
+        # Flat-region economy (Phase 3): supersampling fragments a clean solid region into many
+        # same-fill paths; collapse each colour's fragments into one compound path. SSIM-gated —
+        # the hoist reorders paint and is lossless only on flat tiling art, so textured/overlapping
+        # content fails the gate and keeps the un-merged trace (where the supersample cost stays).
+        if did_supersample:
+            merged_svg = global_same_fill_merge(svg)
+            if merged_svg != svg:
+                ref_img = load_image(image, "RGB")
+                merged_sim = score(ref_img, rasterize(merged_svg, ref_img.size))
+                if merged_sim >= similarity - _SAME_FILL_MERGE_SSIM_DROP:
+                    svg, similarity = merged_svg, merged_sim
         # Path cap = misgated-photo blowup guard. At --detail high the user opted into
         # max fidelity, so a high count is INTENDED for legitimately grainy/painterly art
         # (the reference traces such inputs into thousands of micro-tiles) — raise the cap

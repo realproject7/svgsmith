@@ -322,19 +322,29 @@ def test_lossy_denoise_is_gated_to_lossy_sources(tmp_path):
     assert np.array_equal(np.array(on), np.array(off))  # clean PNG untouched by the gate
 
 
-def test_illustration_geometry_knobs_are_opt_in(tmp_path):
-    """Phase 0: ``illustration_supersample`` / ``illustration_dark_thin`` are OFF by default
-    (output unchanged) and only take effect when explicitly set on the illustration class."""
+def test_supersample_is_auto_for_flat_low_res_and_gated(tmp_path):
+    """Phase 3: the flat low-res illustration class auto-supersamples (crisp lines, off the
+    native pixel staircase) while large/already-high-res inputs stay native; ``--hires``
+    forces it; the illustration knobs still validate."""
     src = tmp_path / "c.png"
-    _gradient_with_black_bars().save(src)  # low-res, rich-colour, mid-edge = illustration signature
+    _gradient_with_black_bars().save(src)  # the _supersample_candidate flat-low-res signature
 
+    # AUTO: a flat low-res input now traces supersampled by default (viewBox > native 300).
     base, _ = convert(str(src), ConvertOptions(max_iters=1))
     base_vb = max(float(v) for v in ET.fromstring(base).get("viewBox").split())
-    assert base_vb == 300  # default: native resolution, no supersample
+    assert base_vb > 300
 
-    sup, _ = convert(str(src), ConvertOptions(max_iters=1, illustration_supersample=2048))
-    sup_vb = max(float(v) for v in ET.fromstring(sup).get("viewBox").split())
-    assert sup_vb > 300  # the supersample knob traces at a larger internal resolution
+    # A large input is NOT a supersample candidate → stays native (no auto-supersample).
+    big = tmp_path / "big.png"
+    _gradient_with_black_bars(size=1100).save(big)
+    big_svg, _ = convert(str(big), ConvertOptions(max_iters=1))
+    big_vb = max(float(v) for v in ET.fromstring(big_svg).get("viewBox").split())
+    assert big_vb == 1100
+
+    # --hires FORCES supersample even on the large input.
+    forced, _ = convert(str(big), ConvertOptions(max_iters=1, hires=True))
+    forced_vb = max(float(v) for v in ET.fromstring(forced).get("viewBox").split())
+    assert forced_vb > 1100
 
     # negative knob values fail fast
     with pytest.raises(ValueError):
