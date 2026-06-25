@@ -139,6 +139,19 @@ def test_consolidation_can_be_disabled():
     assert len(_fill_colors(out)) == 2
 
 
+def test_palette_threshold_zero_merges_nothing():
+    """palette_threshold <= 0 is an identity (no merge): near-identical fills both survive.
+    The short-circuit also skips the O(n^2) pairwise ΔE scan (the coverage path uses 0)."""
+    svg = (
+        f'<svg xmlns="{SVG_NS}" width="10" height="10">'
+        '<path d="M0 0 L1 0 L1 1 Z" fill="#101010"/>'
+        '<path d="M2 2 L3 2 L3 3 Z" fill="#121212"/>'  # near-identical, but not merged at 0
+        "</svg>"
+    )
+    out = postprocess(svg, PostprocessOptions(palette_threshold=0.0, simplify_level=0))
+    assert len(_fill_colors(out)) == 2
+
+
 def test_merge_fill_runs_collapses_consecutive_translate_paths():
     # Two consecutive same-fill translate-only paths collapse into ONE <path>
     # (subpaths combined, translate baked in); a different fill stays separate.

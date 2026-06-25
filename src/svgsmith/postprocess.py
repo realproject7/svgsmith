@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -327,8 +328,14 @@ def _rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(hex_color[i : i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
 
 
+@lru_cache(maxsize=4096)
 def _rgb_to_lab(hex_color: str) -> tuple[float, float, float]:
-    """sRGB hex -> CIE L*a*b* (D65). Perceptual space so 'close' means look-alike."""
+    """sRGB hex -> CIE L*a*b* (D65). Perceptual space so 'close' means look-alike.
+
+    Cached: a palette consolidation compares the same handful of colours many times, so
+    converting each unique hex once (not per comparison) is the difference between a few
+    ms and tens of seconds on a colour-rich trace.
+    """
 
     def _lin(c: float) -> float:
         c /= 255.0
@@ -361,6 +368,12 @@ def _color_distance(a: str, b: str) -> float:
 
 def _consolidate(colors: list[str], threshold: float) -> dict[str, str]:
     """Map each color to a representative; near-identical colors share one."""
+    # threshold <= 0 merges nothing (only an exact-LAB match would qualify, and the
+    # caller already de-duplicates by hex) — so every colour maps to itself. Short-circuit
+    # to identity: skips an O(n^2) pairwise ΔE scan that is pure waste on the coverage path
+    # (palette_threshold=0), where a grain-rich trace can carry thousands of unique fills.
+    if threshold <= 0:
+        return {color: color for color in colors}
     representatives: list[str] = []
     mapping: dict[str, str] = {}
     for color in colors:
