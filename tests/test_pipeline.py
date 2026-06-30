@@ -367,3 +367,32 @@ def test_detail_level_validation_and_spectrum():
         )
         counts[level] = rep.svg.colors
     assert counts["high"] >= counts["normal"] >= counts["clean"] >= counts["poster"]
+
+
+def test_max_input_edge_px_downscales_large_input(tmp_path):
+    """A large input is downscaled to the long-edge cap before tracing (aspect preserved);
+    the Report records it; 0 disables; negative is rejected."""
+    from PIL import Image
+
+    from svgsmith.pipeline import ConvertOptions, convert
+
+    src = tmp_path / "big.png"
+    Image.new("RGB", (2048, 1024), (200, 50, 50)).save(src)
+
+    svg, report = convert(str(src), ConvertOptions(max_input_edge_px=1280))
+    assert 'viewBox="0 0 1280 640"' in svg  # capped + aspect preserved
+    assert any("downscaled 2048x1024 -> 1280x640" in w for w in report.warnings)
+
+    # 0 disables -> full resolution, no downscale note
+    svg_full, report_full = convert(str(src), ConvertOptions(max_input_edge_px=0))
+    assert 'viewBox="0 0 2048 1024"' in svg_full
+    assert not any("downscaled" in w for w in report_full.warnings)
+
+    # below the cap -> untouched
+    small = tmp_path / "small.png"
+    Image.new("RGB", (800, 600), (0, 0, 0)).save(small)
+    _, report_small = convert(str(small), ConvertOptions(max_input_edge_px=1280))
+    assert not any("downscaled" in w for w in report_small.warnings)
+
+    with pytest.raises(ValueError):
+        ConvertOptions(max_input_edge_px=-1)
