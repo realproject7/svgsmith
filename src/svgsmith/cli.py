@@ -59,6 +59,7 @@ def _convert(args: argparse.Namespace) -> int:
         flatten_shading=args.flatten_shading,
         detail=args.detail,
         hires=args.hires,
+        max_input_edge_px=args.max_input_edge_px,
         out=args.out,
     )
 
@@ -205,6 +206,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Color detail dial (default: normal). high = maximum detail; "
             "clean = edge-preserving cleanup, less noise; poster = bold flat graphic, "
             "few colors."
+        ),
+    )
+    convert.add_argument(
+        "--max-input-edge-px",
+        type=int,
+        default=1280,
+        metavar="N",
+        help=(
+            "Downscale the input so its longest edge is at most N px before tracing "
+            "(default: 1280); 0 disables downscaling. This RESIZES the input for a cleaner, "
+            "faster, more economical trace on flat/illustration art — it does not reject "
+            "oversized images. Use 0 to trace at full resolution."
         ),
     )
     convert.add_argument(

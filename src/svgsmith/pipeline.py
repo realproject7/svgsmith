@@ -353,6 +353,12 @@ class ConvertOptions:
     # photos and already-high-res inputs are untouched.
     hires: bool = False
     out: str | None = None
+    # Downscale the input so its LONGEST edge is at most this many pixels before tracing (LANCZOS,
+    # aspect preserved, only when larger — never upscales). Bounds conversion cost and, on the
+    # target flat/illustration art, yields a cleaner, more economical trace (excess resolution, JPEG
+    # noise and AI-upscale artifacts all fragment the trace). 0 disables (full-resolution). This
+    # RESIZES the input; it is NOT the reject-cap a host may apply to oversized uploads.
+    max_input_edge_px: int = 1280
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.quality <= 1.0:
@@ -366,6 +372,10 @@ class ConvertOptions:
         if self.illustration_dark_thin < 0:
             raise ValueError(
                 f"illustration_dark_thin must be >= 0, got {self.illustration_dark_thin}"
+            )
+        if self.max_input_edge_px < 0:
+            raise ValueError(
+                f"max_input_edge_px must be >= 0 (0 disables), got {self.max_input_edge_px}"
             )
         if self.detail not in DETAIL_LEVELS:
             raise ValueError(
@@ -439,6 +449,23 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             image.format = _src.format
     except Exception:
         pass
+
+    # Input long-edge cap (#82): downscale a large input before any classify/preprocess/trace so
+    # the whole pipeline shares one resolution. Bounds cost and gives a cleaner, more economical
+    # trace on the flat/illustration target (excess resolution + JPEG/upscale noise fragment the
+    # trace). LANCZOS, aspect-preserved, only when larger — never upscales. 0 disables.
+    downscale_note: str | None = None
+    if opts.max_input_edge_px > 0 and max(image.size) > opts.max_input_edge_px:
+        ow, oh = image.size
+        scale = opts.max_input_edge_px / max(ow, oh)
+        new_size = (max(1, round(ow * scale)), max(1, round(oh * scale)))
+        src_format = getattr(image, "format", None)
+        image = image.resize(new_size, Image.Resampling.LANCZOS)
+        image.format = src_format  # keep the source-format hint for the lossy-denoise gate (#71)
+        downscale_note = (
+            f"input downscaled {ow}x{oh} -> {new_size[0]}x{new_size[1]} "
+            f"(max_input_edge_px={opts.max_input_edge_px})"
+        )
 
     classification = _resolve_classification(image, opts.mode)
     flatten_sigma, palette_size, palette_threshold = DETAIL_LEVELS[opts.detail]
@@ -697,6 +724,6 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         similarity=similarity,
         passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
-        warnings=list(classification.warnings),
+        warnings=list(classification.warnings) + ([downscale_note] if downscale_note else []),
     )
     return svg, report
