@@ -214,6 +214,14 @@ _SMOOTH_SSIM_TOLERANCE = 0.06
 # plain tolerance are unaffected, so default behaviour is unchanged for them.
 _SMOOTH_WOBBLE_RELIEF = 0.25
 _SMOOTH_SSIM_HARD_FLOOR = 0.10
+# Smooth must EARN its keep (cycle-3). The curve-refit is kept only when it does NOT worsen
+# outline width uniformity (ridge p90/IQR — the eye-aligned screen), with a small SSIM earn-floor
+# as a feature-loss backstop. This replaces the old _SMOOTH_SSIM_TOLERANCE 0.06 free-pass +
+# wobble-relief clause, which shipped a fidelity-negative smooth on clean linework: raw SSIM
+# rewards the antialiased staircase, so SSIM alone wrongly tolerated a fattening/raggedy smooth.
+_SMOOTH_SSIM_EARN_FLOOR = 0.02  # max SSIM the smooth may cost, and only if it earns a ridge win
+_SMOOTH_RIDGE_EPS_IQR = 0.5     # ridge-IQR non-regression slack at native-1024 (×2 width scale)
+_SMOOTH_RIDGE_EPS_P90 = 1.0     # ridge-p90 non-regression slack at native-1024
 _MODE_PRESET = {"binary": "logo", "color": "illustration", "pixel": "pixel"}
 MODES = ("auto", *_MODE_PRESET)
 
@@ -289,6 +297,28 @@ def _path_wobble(svg: str) -> float:
             flips += float(np.sum(small[:-1] & flip))
             length += float(seg_len.sum())
     return 100.0 * flips / max(length, 1.0)
+
+
+def _ridge_uniformity(rendered: Image.Image) -> tuple[float, float]:
+    """(p90, IQR) of local outline width = 2x the distance-transform ridge of the dark mask.
+
+    The eye-aligned outline-width-uniformity screen (cycle-3): a fattening / raggedy smooth raises
+    these; a clean uniform band keeps them low. Flattened on white so the dark mask is meaningful.
+    NOTE: this is a DARK-OUTLINE screen (luma < 110). For non-dark content it returns (0, 0), so the
+    smooth gate naturally falls back to SSIM non-regression there — acceptable for outlined art.
+    """
+    from scipy.ndimage import distance_transform_edt, maximum_filter
+
+    im = rendered.convert("RGBA")
+    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    arr = np.asarray(Image.alpha_composite(bg, im).convert("RGB"))
+    dark = arr.max(2) < 110
+    dt = distance_transform_edt(dark)
+    ridge = dt[(dt > 0) & (dt >= maximum_filter(dt, 3) - 1e-6)]
+    if ridge.size < 20:
+        return 0.0, 0.0
+    w = ridge * 2.0
+    return float(np.percentile(w, 90)), float(np.percentile(w, 75) - np.percentile(w, 25))
 
 
 @dataclass(frozen=True)
@@ -479,18 +509,42 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
             # resolve far finer than the original pixels — pure byte bloat. smooth_svg
             # auto-drops decimals by log10(factor) so granularity tracks the native grid.
             smoothed = smooth_svg(svg, native_long_edge=max(reference.size))
-            smoothed_score = score(reference, rasterize(smoothed, reference.size))
-            keep = smoothed_score >= result.best_score - _SMOOTH_SSIM_TOLERANCE
-            # Wobble-relief escape clause: raw SSIM rewards the antialiased staircase, so a
-            # visibly-sharper smooth can dip past the plain tolerance on the wobbliest inputs.
-            # Recover those by measuring path wobble directly (SSIM is blind to it): if
-            # smoothing genuinely straightens the contours and SSIM stays within the wider
-            # hard floor, keep it. The floor still vetoes a true feature loss (huge SSIM drop).
-            if not keep and smoothed_score >= result.best_score - _SMOOTH_SSIM_HARD_FLOOR:
-                raw_wobble = _path_wobble(svg)
-                if raw_wobble > 0.0:
-                    relief = (raw_wobble - _path_wobble(smoothed)) / raw_wobble
-                    keep = relief >= _SMOOTH_WOBBLE_RELIEF
+            raw_render = rasterize(svg, reference.size)
+            smoothed_render = rasterize(smoothed, reference.size)
+            smoothed_score = score(reference, smoothed_render)
+            # Smooth must EARN its keep on outline width uniformity (ridge p90/IQR), not on raw
+            # SSIM alone — raw SSIM rewards the antialiased staircase, so it tolerated a fattening
+            # smooth on clean linework (cycle-3). Ridge is primary; a small SSIM earn-floor guards
+            # feature loss. eps scales with render resolution, floored so tiny inputs stay possible.
+            # NOTE: topology (holes/euler) is intentionally NOT part of this v1 gate — the gate
+            # rejects all observed cases, so topology only matters on a future KEEP path; add a
+            # topology non-regression guard if a smooth KEEP ever shows up in an eye-gate.
+            scale = max(max(reference.size) / 1024.0, 0.5)
+            eps_iqr = _SMOOTH_RIDGE_EPS_IQR * scale
+            eps_p90 = _SMOOTH_RIDGE_EPS_P90 * scale
+            if opts.transparent_background:
+                # The transparent-background subject extraction (drop_background_paths) is
+                # region-masked off the FINAL contours and only preserves the subject reliably on
+                # the SMOOTHED geometry (the raw trace can leave the subject classified as
+                # background). So this path keeps the prior lenient smooth behavior; the ridge
+                # tightening below applies to the standard opaque render only. (drop_background
+                # fragility queued separately.)
+                keep = smoothed_score >= result.best_score - _SMOOTH_SSIM_HARD_FLOOR
+            else:
+                r_p90, r_iqr = _ridge_uniformity(raw_render)
+                s_p90, s_iqr = _ridge_uniformity(smoothed_render)
+                iqr_ok = s_iqr <= r_iqr + eps_iqr
+                p90_ok = s_p90 <= r_p90 + eps_p90
+                if smoothed_score >= result.best_score:
+                    keep = iqr_ok and p90_ok  # an SSIM win still needs outline-width non-regression
+                elif smoothed_score >= result.best_score - _SMOOTH_SSIM_EARN_FLOOR:
+                    # a tiny SSIM cost is allowed only if smooth earns a MATERIAL ridge win and the
+                    # other ridge metric does not regress (rejects no-benefit/ambiguous cases).
+                    p90_win = r_p90 - s_p90 >= eps_p90 and iqr_ok
+                    iqr_win = r_iqr - s_iqr >= eps_iqr and p90_ok
+                    keep = p90_win or iqr_win
+                else:
+                    keep = False
             if keep:
                 svg, similarity = smoothed, smoothed_score
         return svg, similarity, result.iterations
