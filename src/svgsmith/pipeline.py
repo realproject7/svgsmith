@@ -7,6 +7,7 @@ the canonical :class:`~svgsmith.report.Report`. The CLI is a thin wrapper around
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -47,6 +48,20 @@ DETAIL_LEVELS = {
 # the loop-validated economical-fidelity default; "high" preserves painterly brush-grain
 # (reference-grade on textured art, at more paths/bytes — fidelity over economy, on demand).
 COVERAGE_NOISE_DE = {"high": 5.0, "normal": 13.0, "clean": 18.0, "poster": 26.0}
+# Detail-loss class-select detector (P2). The default coverage trace is economical but flattens
+# fine interior marks the reference keeps (stipple, hatching, thin garment/muscle lines). An
+# image-level detector routes such detail-rich inputs to a recovery op-point (pre-trace flatten
+# OFF + a fine region merge) that traces those marks back, while clean-flat art keeps the default
+# (no bloat). Signal = fine-mark density of the original MINUS that of the default (A) render — the
+# count of small high-frequency marks the default specifically flattened away. Counting the dropped
+# marks isolates "texture A lost" from colour error / misalignment (which broke residual-ΔE gates).
+_DETAIL_MARK_DROP_THRESH = 0.7  # route to recovery iff (orig - A) fine-mark density > this
+_DETAIL_C_REGION_NOISE_DE = 8.0  # recovery op-point region-merge ΔE76 (finer than the default)
+_DETAIL_MARK_HIGHFREQ_DE = 4.0  # |L - blur(L)| above this = a high-frequency pixel
+_DETAIL_MARK_BLUR_SIGMA = 2.0  # local blur sigma for the high-frequency residual
+_DETAIL_MARK_MIN_PX = 2  # a "fine mark" is a connected component in [min, max] px (at sample res)
+_DETAIL_MARK_MAX_PX = 300
+_DETAIL_MARK_SAMPLE_EDGE = 768  # detector analysis long-edge
 # Pre-trace supersampling target (#60) and per-detail fixed-K palette size (#41)
 # for color mode. Upscaling smooths contours; the small k-means palette + black
 # anchor snaps each region to one clean color and keeps the outline pure black.
@@ -177,6 +192,35 @@ def _has_black_outline(image: ImageInput) -> bool:
     lab = rgb2lab(rgb / 255.0)
     near_black = (np.linalg.norm(lab, axis=2) <= _COVERAGE_BLACK_SNAP_DE).mean()
     return float(near_black) >= _COVERAGE_BLACK_SNAP_MIN_AREA
+
+
+def _fine_mark_density(rendered: Image.Image) -> float:
+    """Density of small high-frequency marks (per 10k px, analysed at 768px long-edge).
+
+    A "fine mark" = a small connected component (``_DETAIL_MARK_MIN_PX``..``_MAX_PX`` px) of the
+    high-frequency residual ``|L - blur(L)| > _DETAIL_MARK_HIGHFREQ_DE`` — i.e. stipple / hatch /
+    thin-line texture, not smooth shading or large flat regions. Used by the P2 detail-loss
+    detector: comparing the original's density to the default (A) render's density measures the
+    fine marks the default flattened away, immune to colour error / misalignment.
+    """
+    from scipy.ndimage import gaussian_filter, label
+    from skimage.color import rgb2lab
+
+    img = rendered.convert("RGB")
+    w, h = img.size
+    scale = _DETAIL_MARK_SAMPLE_EDGE / max(w, h)
+    if scale < 1.0:
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    arr = np.asarray(img, dtype=np.float64)
+    lum = rgb2lab(arr / 255.0)[..., 0]
+    residual = np.abs(lum - gaussian_filter(lum, _DETAIL_MARK_BLUR_SIGMA))
+    labels, n = label(residual > _DETAIL_MARK_HIGHFREQ_DE)
+    if n == 0:
+        return 0.0
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0  # background
+    marks = int(((sizes >= _DETAIL_MARK_MIN_PX) & (sizes <= _DETAIL_MARK_MAX_PX)).sum())
+    return marks / (arr.shape[0] * arr.shape[1] / 1e4)
 
 
 def _coverage_candidate(image: ImageInput) -> bool:
@@ -359,6 +403,12 @@ class ConvertOptions:
     # noise and AI-upscale artifacts all fragment the trace). 0 disables (full-resolution). This
     # RESIZES the input; it is NOT the reject-cap a host may apply to oversized uploads.
     max_input_edge_px: int = 1280
+    # Detail-recovery time budget (P2). The detail-loss detector's recovery retrace roughly doubles
+    # convert time on detail-rich inputs. When set, the recovery retrace is SKIPPED if the default
+    # (A) trace already took longer than this many seconds — so a slow input degrades gracefully to
+    # the default output instead of risking a host request timeout. None (default) = no budget, so
+    # CLI/library behaviour is unchanged; a hosted API sets it (e.g. 60) to bound worst-case cost.
+    retrace_time_budget_s: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.quality <= 1.0:
@@ -376,6 +426,10 @@ class ConvertOptions:
         if self.max_input_edge_px < 0:
             raise ValueError(
                 f"max_input_edge_px must be >= 0 (0 disables), got {self.max_input_edge_px}"
+            )
+        if self.retrace_time_budget_s is not None and self.retrace_time_budget_s < 0:
+            raise ValueError(
+                f"retrace_time_budget_s must be >= 0 or None, got {self.retrace_time_budget_s}"
             )
         if self.detail not in DETAIL_LEVELS:
             raise ValueError(
@@ -455,6 +509,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     # trace on the flat/illustration target (excess resolution + JPEG/upscale noise fragment the
     # trace). LANCZOS, aspect-preserved, only when larger — never upscales. 0 disables.
     downscale_note: str | None = None
+    detail_note: str | None = None  # set by the P2 detail-recovery block on the coverage path
     if opts.max_input_edge_px > 0 and max(image.size) > opts.max_input_edge_px:
         ow, oh = image.size
         scale = opts.max_input_edge_px / max(ow, oh)
@@ -637,9 +692,11 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         snap_black = (
             _COVERAGE_BLACK_SNAP_DE > 0.0 and not did_supersample and _has_black_outline(image)
         )
+        _base_t0 = time.perf_counter()
         base_svg, base_sim, base_iters = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
+        base_render_s = time.perf_counter() - _base_t0
         if snap_black:
             # Palette-build snap gives the tracer a clean pure-black core; the output-side
             # fill snap then collapses the tints the colour tracer re-derives along the
@@ -679,6 +736,29 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                 merged_sim = score(ref_img, rasterize(merged_svg, ref_img.size))
                 if merged_sim >= similarity - _SAME_FILL_MERGE_SSIM_DROP:
                     svg, similarity = merged_svg, merged_sim
+        # Detail-loss recovery (P2): if the default (A) coverage trace flattened away fine marks
+        # the original has (stipple / hatch / thin garment lines), retrace at the recovery
+        # op-point (pre-trace flatten OFF + a fine region merge) and use it. Clean-flat art has
+        # ~zero mark drop → untouched (no bloat). ``retrace_time_budget_s`` skips the retrace when
+        # the base (A) trace already ran longer than the budget, so a slow input degrades to the
+        # default output instead of risking a host timeout (default None = always allowed).
+        budget = opts.retrace_time_budget_s
+        if budget is not None and base_render_s > budget:
+            detail_note = (
+                f"detail-recovery skipped: base trace {base_render_s:.1f}s > "
+                f"retrace_time_budget_s={budget}"
+            )
+        else:
+            ref_img = load_image(image, "RGB")
+            drop = _fine_mark_density(ref_img) - _fine_mark_density(rasterize(svg, ref_img.size))
+            if drop > _DETAIL_MARK_DROP_THRESH:
+                recover_pre = replace(
+                    cov_pre, flatten=False, coverage_region_noise_de=_DETAIL_C_REGION_NOISE_DE
+                )
+                svg, similarity, iterations = render(
+                    recover_pre, cov_class, palette_threshold=0.0, max_iters=1
+                )
+                detail_note = f"detail-recovery applied (fine-mark drop {drop:.2f})"
         # Path cap = misgated-photo blowup guard. At --detail high the user opted into
         # max fidelity, so a high count is INTENDED for legitimately grainy/painterly art
         # (the reference traces such inputs into thousands of micro-tiles) — raise the cap
@@ -724,6 +804,10 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         similarity=similarity,
         passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
-        warnings=list(classification.warnings) + ([downscale_note] if downscale_note else []),
+        warnings=(
+            list(classification.warnings)
+            + ([downscale_note] if downscale_note else [])
+            + ([detail_note] if detail_note else [])
+        ),
     )
     return svg, report

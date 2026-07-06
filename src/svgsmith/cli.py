@@ -60,6 +60,7 @@ def _convert(args: argparse.Namespace) -> int:
         detail=args.detail,
         hires=args.hires,
         max_input_edge_px=args.max_input_edge_px,
+        retrace_time_budget_s=args.retrace_time_budget_s,
         out=args.out,
     )
 
@@ -218,6 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: 1280); 0 disables downscaling. This RESIZES the input for a cleaner, "
             "faster, more economical trace on flat/illustration art — it does not reject "
             "oversized images. Use 0 to trace at full resolution."
+        ),
+    )
+    convert.add_argument(
+        "--retrace-time-budget-s",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Skip the detail-loss recovery retrace when the default trace already took longer "
+            "than SECONDS (default: no budget). The recovery retrace roughly doubles convert "
+            "time on detail-rich inputs; a budget bounds worst-case latency by degrading to the "
+            "default output on slow inputs. Mainly for hosted use with a request timeout."
         ),
     )
     convert.add_argument(
