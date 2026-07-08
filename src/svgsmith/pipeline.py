@@ -102,6 +102,17 @@ _DETAIL_MARK_BLUR_SIGMA = 2.0  # local blur sigma for the high-frequency residua
 _DETAIL_MARK_MIN_PX = 2  # a "fine mark" is a connected component in [min, max] px (at sample res)
 _DETAIL_MARK_MAX_PX = 300
 _DETAIL_MARK_SAMPLE_EDGE = 768  # detector analysis long-edge
+# Class-select detail routing (#87). After the base coverage trace, a large fine-mark DROP (the
+# original's density minus the default render's) means the economical merge flattened away texture
+# the reference keeps; re-trace ONCE at a finer op-point (flatten OFF + de8) and adopt it only if a
+# keep-gate agrees. v1 (#84/#85) over-fired on clean-flat speckle (thresh 0.7, no floor) and swapped
+# unconditionally; v2 raises the threshold, adds the same absolute fmd floor as the cap, and gates
+# the swap. Default-OFF behind --auto-detail until the corpus + operator eye-gate pass.
+_DETAIL_DROP_THRESH = 0.85  # route to recovery iff fine-mark DROP (orig - default) exceeds this
+_DETAIL_RECOVERY_DE = 8.0  # recovery op-point: coverage region merge ΔE (de8, finer than default)
+_DETAIL_KEEP_DROP_SHRINK = 0.5  # keep-gate: recovery must cut the DROP by at least this fraction
+_DETAIL_KEEP_SSIM_DROP = 0.005  # keep-gate: recovery SSIM must be >= default SSIM - this
+_DETAIL_KEEP_PATH_MULT = 6  # keep-gate: recovery paths <= this x default paths (and <= cov_cap)
 
 
 def _fine_mark_density(rendered: Image.Image) -> float:
@@ -407,6 +418,12 @@ class ConvertOptions:
     # default value the detail-aware relax (#86) may lift it to _DETAIL_CAP_EDGE_PX for dense
     # inputs; any explicit value (incl. 0) is honoured verbatim.
     max_input_edge_px: int = _DEFAULT_INPUT_EDGE_PX
+    # Class-select detail routing (#87), opt-in. When a coverage-class trace drops fine texture the
+    # reference keeps, re-trace once at a finer op-point and adopt it only if a keep-gate agrees.
+    # Default-OFF: byte-identical unless enabled. retrace_time_budget_s (host guard) skips the
+    # re-trace when the base trace already ran longer than the budget (None = always allowed).
+    auto_detail: bool = False
+    retrace_time_budget_s: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.quality <= 1.0:
@@ -424,6 +441,10 @@ class ConvertOptions:
         if self.max_input_edge_px < 0:
             raise ValueError(
                 f"max_input_edge_px must be >= 0 (0 disables), got {self.max_input_edge_px}"
+            )
+        if self.retrace_time_budget_s is not None and self.retrace_time_budget_s < 0:
+            raise ValueError(
+                f"retrace_time_budget_s must be >= 0 or None, got {self.retrace_time_budget_s}"
             )
         if self.detail not in DETAIL_LEVELS:
             raise ValueError(

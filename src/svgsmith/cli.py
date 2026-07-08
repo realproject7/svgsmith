@@ -60,6 +60,8 @@ def _convert(args: argparse.Namespace) -> int:
         detail=args.detail,
         hires=args.hires,
         max_input_edge_px=args.max_input_edge_px,
+        auto_detail=args.auto_detail,
+        retrace_time_budget_s=args.retrace_time_budget_s,
         out=args.out,
     )
 
@@ -229,6 +231,26 @@ def build_parser() -> argparse.ArgumentParser:
             "lines on ANY color input. Low-resolution flat illustrations get this "
             "automatically; --hires forces it on textured or already-large art too "
             "(more paths/bytes, slower)."
+        ),
+    )
+    convert.add_argument(
+        "--auto-detail",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in (#87): on coverage-class art that lost fine texture the reference keeps, "
+            "re-trace once at a finer op-point and adopt it only if a quality gate agrees "
+            "(more paths/bytes on the affected class; no effect on clean-flat art)."
+        ),
+    )
+    convert.add_argument(
+        "--retrace-time-budget-s",
+        type=float,
+        default=None,
+        metavar="S",
+        help=(
+            "With --auto-detail, skip the recovery re-trace when the base trace already ran "
+            "longer than S seconds (a host latency guard; default: no limit)."
         ),
     )
     convert.add_argument(
