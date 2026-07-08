@@ -459,3 +459,24 @@ def test_detail_aware_cap_relaxes_for_dense_over_cap_input(tmp_path):
     Image.new("RGB", (1400, 80), (150, 60, 30)).save(flat)
     _, r_flat = convert(str(flat), ConvertOptions(max_iters=1))
     assert any("downscaled 1400x80 -> 1280" in w for w in r_flat.warnings)  # control: capped
+
+
+def test_auto_detail_default_off_and_no_overfire_on_flat(tmp_path):
+    """#87: --auto-detail is default-OFF (byte-identical) and never fires on non-coverage flat art —
+    the v1 clean-flat over-fire that shelved #84/#85."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (500, 500), (240, 230, 210))
+    ImageDraw.Draw(img).rectangle([100, 100, 400, 400], fill=(40, 90, 160))
+    src = tmp_path / "flat.png"
+    img.save(src)
+
+    plain, _ = convert(str(src), ConvertOptions(max_iters=1))
+    auto, r_auto = convert(str(src), ConvertOptions(max_iters=1, auto_detail=True))
+    assert plain == auto  # recovery never runs on flat art → byte-identical
+    assert not any("detail-recovery" in w for w in r_auto.warnings)
+
+
+def test_retrace_time_budget_validation():
+    with pytest.raises(ValueError):
+        ConvertOptions(retrace_time_budget_s=-1)

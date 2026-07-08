@@ -7,6 +7,7 @@ the canonical :class:`~svgsmith.report.Report`. The CLI is a thin wrapper around
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -524,6 +525,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     # trace on the flat/illustration target (excess resolution + JPEG/upscale noise fragment the
     # trace). LANCZOS, aspect-preserved, only when larger — never upscales. 0 disables.
     downscale_note: str | None = None
+    detail_note: str | None = None  # #87 class-select routing note (applied/rejected/skipped)
     # Detail-aware relax (#86): at the default cap, a detail-dense original (faces/stipple/hatch)
     # would be shredded by the downscale, so lift the cap to _DETAIL_CAP_EDGE_PX. Only at the
     # default — an explicit cap (any other value, incl. 0) is honoured verbatim.
@@ -722,6 +724,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         snap_black = (
             _COVERAGE_BLACK_SNAP_DE > 0.0 and not did_supersample and _has_black_outline(image)
         )
+        _cov_t0 = time.perf_counter()  # base-trace timing for the #87 retrace budget guard
         base_svg, base_sim, base_iters = render(
             cov_pre, cov_class, palette_threshold=0.0, max_iters=1
         )
@@ -771,6 +774,50 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         # re-traced on the baseline path (which both loses the grain AND doubles the time).
         # A truly misgated photo still explodes far past the high cap and falls back.
         cov_cap = _COVERAGE_MAX_PATHS_HIGH if opts.detail == "high" else _COVERAGE_MAX_PATHS
+        # Class-select detail routing (#87, opt-in via --auto-detail): the economical region merge
+        # can flatten fine texture the reference keeps. When the ORIGINAL is far denser in fine
+        # marks than the default render, re-trace ONCE at a finer op-point (flatten OFF + de8) and
+        # adopt it only if a keep-gate agrees. The absolute fmd floor + high DROP threshold exclude
+        # clean-flat class #84/#85 shelved (no over-fire); the keep-gate replaces v1's unconditional
+        # swap. retrace_time_budget_s skips the re-trace when the base trace already ran long.
+        if opts.auto_detail:
+            base_render_s = time.perf_counter() - _cov_t0
+            budget = opts.retrace_time_budget_s
+            if budget is not None and base_render_s > budget:
+                detail_note = (
+                    f"detail-recovery skipped: base trace {base_render_s:.1f}s > budget {budget}s"
+                )
+            else:
+                ref_img = load_image(image, "RGB")
+                orig_fmd = _fine_mark_density(ref_img)
+                base_drop = orig_fmd - _fine_mark_density(rasterize(svg, ref_img.size))
+                if orig_fmd >= _DETAIL_CAP_FMD_FLOOR and base_drop > _DETAIL_DROP_THRESH:
+                    recover_pre = replace(
+                        cov_pre, flatten=False, coverage_region_noise_de=_DETAIL_RECOVERY_DE
+                    )
+                    rec_svg, rec_sim, rec_iters = render(
+                        recover_pre, cov_class, palette_threshold=0.0, max_iters=1
+                    )
+                    rec_drop = orig_fmd - _fine_mark_density(rasterize(rec_svg, ref_img.size))
+                    base_paths, rec_paths = svg.count("<path"), rec_svg.count("<path")
+                    # Keep-gate: adopt recovery ONLY if it recovers detail (DROP shrinks), holds
+                    # SSIM, and stays within a path budget — else the economical base output ships.
+                    keep = (
+                        rec_drop <= base_drop * (1.0 - _DETAIL_KEEP_DROP_SHRINK)
+                        and rec_sim >= similarity - _DETAIL_KEEP_SSIM_DROP
+                        and rec_paths <= min(cov_cap, base_paths * _DETAIL_KEEP_PATH_MULT)
+                    )
+                    if keep:
+                        svg, similarity, iterations = rec_svg, rec_sim, rec_iters
+                        detail_note = (
+                            f"detail-recovery applied (fmd drop {base_drop:.2f}->{rec_drop:.2f}, "
+                            f"{base_paths}->{rec_paths} paths)"
+                        )
+                    else:
+                        detail_note = (
+                            f"detail-recovery rejected (drop {base_drop:.2f}->{rec_drop:.2f}, "
+                            f"ssim {similarity:.3f}->{rec_sim:.3f}, {base_paths}->{rec_paths}p)"
+                        )
         if svg.count("<path") > cov_cap:
             coverage = False  # not actually a clean gradient — use the proven path
 
@@ -809,6 +856,10 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         similarity=similarity,
         passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
-        warnings=list(classification.warnings) + ([downscale_note] if downscale_note else []),
+        warnings=(
+            list(classification.warnings)
+            + ([downscale_note] if downscale_note else [])
+            + ([detail_note] if detail_note else [])
+        ),
     )
     return svg, report
