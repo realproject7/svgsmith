@@ -459,3 +459,18 @@ def test_detail_aware_cap_relaxes_for_dense_over_cap_input(tmp_path):
     Image.new("RGB", (1400, 80), (150, 60, 30)).save(flat)
     _, r_flat = convert(str(flat), ConvertOptions(max_iters=1))
     assert any("downscaled 1400x80 -> 1280" in w for w in r_flat.warnings)  # control: capped
+
+
+def test_detail_high_always_relaxes_cap_over_default(tmp_path):
+    """#90: --detail high is a max-fidelity opt-in — a >1280 input relaxes to the fine grid even
+    when its fine-mark density is below the floor (a flat has ~0 fmd), while normal keeps 1280."""
+    from PIL import Image
+
+    flat = tmp_path / "flat_wide.png"
+    Image.new("RGB", (1600, 200), (150, 60, 30)).save(flat)
+
+    _, r_high = convert(str(flat), ConvertOptions(detail="high", max_iters=1))
+    assert not any("downscaled" in w for w in r_high.warnings)  # 1600 <= relaxed 2048 cap
+
+    _, r_norm = convert(str(flat), ConvertOptions(max_iters=1))
+    assert any("downscaled 1600x200 -> 1280" in w for w in r_norm.warnings)
