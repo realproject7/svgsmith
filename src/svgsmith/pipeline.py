@@ -802,10 +802,15 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
                     base_paths, rec_paths = svg.count("<path"), rec_svg.count("<path")
                     # Keep-gate: adopt recovery ONLY if it recovers detail (DROP shrinks), holds
                     # SSIM, and stays within a path budget — else the economical base output ships.
+                    # The budget is the HIGH-detail coverage cap (recovery is a deliberate detail-
+                    # retention op, like --detail high — the reference traces such art into many
+                    # paths), bounded by a multiple of the base so a misgated blowup still falls
+                    # back. (The normal cov_cap would reject a legitimate recovery, e.g. popgirl.)
+                    path_budget = min(_COVERAGE_MAX_PATHS_HIGH, base_paths * _DETAIL_KEEP_PATH_MULT)
                     keep = (
                         rec_drop <= base_drop * (1.0 - _DETAIL_KEEP_DROP_SHRINK)
                         and rec_sim >= similarity - _DETAIL_KEEP_SSIM_DROP
-                        and rec_paths <= min(cov_cap, base_paths * _DETAIL_KEEP_PATH_MULT)
+                        and rec_paths <= path_budget
                     )
                     if keep:
                         svg, similarity, iterations = rec_svg, rec_sim, rec_iters
