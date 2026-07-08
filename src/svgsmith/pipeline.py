@@ -512,13 +512,24 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         opts.max_input_edge_px == _DEFAULT_INPUT_EDGE_PX
         and max(image.size) > _DEFAULT_INPUT_EDGE_PX
     ):
-        fmd = _fine_mark_density(image)
-        if fmd >= _DETAIL_CAP_FMD_FLOOR:
+        # --detail high is an explicit max-fidelity opt-in, so it always gets the fine grid
+        # (#90): a downscaled trace warps large clean-shape boundaries between near-identical
+        # dark colors (the mustache case), and the fmd floor can sit just under a real input
+        # (7.8 vs 8.0) — high must not gamble on the density detector. Other levels keep the
+        # density gate (the economy default).
+        if opts.detail == "high":
             effective_cap = _DETAIL_CAP_EDGE_PX
             detail_note = (
-                f", detail-dense fmd={fmd:.1f}, cap relaxed "
-                f"{_DEFAULT_INPUT_EDGE_PX}->{_DETAIL_CAP_EDGE_PX}"
+                f", detail=high, cap relaxed {_DEFAULT_INPUT_EDGE_PX}->{_DETAIL_CAP_EDGE_PX}"
             )
+        else:
+            fmd = _fine_mark_density(image)
+            if fmd >= _DETAIL_CAP_FMD_FLOOR:
+                effective_cap = _DETAIL_CAP_EDGE_PX
+                detail_note = (
+                    f", detail-dense fmd={fmd:.1f}, cap relaxed "
+                    f"{_DEFAULT_INPUT_EDGE_PX}->{_DETAIL_CAP_EDGE_PX}"
+                )
     if effective_cap > 0 and max(image.size) > effective_cap:
         ow, oh = image.size
         scale = effective_cap / max(ow, oh)
