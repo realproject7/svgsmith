@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/svgsmith.svg)](https://pypi.org/project/svgsmith/)
 [![Python](https://img.shields.io/pypi/pyversions/svgsmith.svg)](https://pypi.org/project/svgsmith/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/realproject7/svgsmith/blob/main/LICENSE)
+[![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](https://github.com/realproject7/svgsmith/blob/main/LICENSE)
 [![CI](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/realproject7/svgsmith/actions/workflows/ci.yml)
 
 ```bash
@@ -232,4 +232,4 @@ result and a confidence number, not a guess. For an end-to-end agent wrapper, se
 
 ## License
 
-MIT — see [LICENSE](https://github.com/realproject7/svgsmith/blob/main/LICENSE).
+[FSL-1.1-MIT](https://fsl.software/) (Functional Source License — free for internal use, education, research and non-competing use; converts to MIT two years after each release) — see [LICENSE](https://github.com/realproject7/svgsmith/blob/main/LICENSE).
