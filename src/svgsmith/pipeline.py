@@ -85,6 +85,52 @@ DETAIL_KMEANS_K = {"high": 10, "normal": 8, "clean": 7, "poster": 5}
 # input that slipped through the cheap gate) — fall back to the baseline path so a
 # misclassification costs one extra trace, never a bloated SVG.
 _SUPERSAMPLE_MAX_PATHS = 1200
+# Detail-aware input cap (#86). When the long-edge cap would fire, measure the ORIGINAL's fine-mark
+# density; a high value means naively downscaling to the default cap would shred semantic detail
+# (faces, stipple, hatching), so the cap is relaxed to _DETAIL_CAP_EDGE_PX — still bounded, never
+# uncapped. Applies only when the cap is at its default; an explicit --max-input-edge-px (any other
+# value, incl. 0) is honoured verbatim. Structurally non-regressing: inputs <= the default cap never
+# enter the branch (byte-identical), and low-density inputs keep the default cap. Detector ported
+# from the shelved P2 work (#84/#85); the 8.0 floor was calibrated on the pv-corpus + new-test sweep
+# (flat/line art stay below it at their resolution, and relaxing the few dense "flat" cartoons that
+# cross it is visually harmless — verified — while the illustrations that need it clear it).
+_DEFAULT_INPUT_EDGE_PX = 1280
+_DETAIL_CAP_EDGE_PX = _TRACE_RESOLUTION  # 2048 — relaxed cap for detail-dense inputs
+_DETAIL_CAP_FMD_FLOOR = 8.0  # fine-mark density (per 10k px @768) at/above which the cap relaxes
+_DETAIL_MARK_HIGHFREQ_DE = 4.0  # |L - blur(L)| above this = a high-frequency pixel
+_DETAIL_MARK_BLUR_SIGMA = 2.0  # local blur sigma for the high-frequency residual
+_DETAIL_MARK_MIN_PX = 2  # a "fine mark" is a connected component in [min, max] px (at sample res)
+_DETAIL_MARK_MAX_PX = 300
+_DETAIL_MARK_SAMPLE_EDGE = 768  # detector analysis long-edge
+
+
+def _fine_mark_density(rendered: Image.Image) -> float:
+    """Density of small high-frequency marks (per 10k px, analysed at 768px long-edge).
+
+    A "fine mark" = a small connected component (``_DETAIL_MARK_MIN_PX``..``_MAX_PX`` px) of the
+    high-frequency residual ``|L - blur(L)| > _DETAIL_MARK_HIGHFREQ_DE`` — i.e. stipple / hatch /
+    thin-line texture, not smooth shading or large flat regions. Used by the detail-aware input
+    cap (#86): a high density on an over-cap input means downscaling to the default cap would
+    shred fine detail, so the cap is relaxed. Ported from the P2 detail-loss detector (#84/#85).
+    """
+    from scipy.ndimage import gaussian_filter, label
+    from skimage.color import rgb2lab
+
+    img = rendered.convert("RGB")
+    w, h = img.size
+    scale = _DETAIL_MARK_SAMPLE_EDGE / max(w, h)
+    if scale < 1.0:
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    arr = np.asarray(img, dtype=np.float64)
+    lum = rgb2lab(arr / 255.0)[..., 0]
+    residual = np.abs(lum - gaussian_filter(lum, _DETAIL_MARK_BLUR_SIGMA))
+    labels, n = label(residual > _DETAIL_MARK_HIGHFREQ_DE)
+    if n == 0:
+        return 0.0
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0  # background
+    marks = int(((sizes >= _DETAIL_MARK_MIN_PX) & (sizes <= _DETAIL_MARK_MAX_PX)).sum())
+    return marks / (arr.shape[0] * arr.shape[1] / 1e4)
 
 
 def _supersample_candidate(image: ImageInput) -> bool:
@@ -357,8 +403,10 @@ class ConvertOptions:
     # aspect preserved, only when larger — never upscales). Bounds conversion cost and, on the
     # target flat/illustration art, yields a cleaner, more economical trace (excess resolution, JPEG
     # noise and AI-upscale artifacts all fragment the trace). 0 disables (full-resolution). This
-    # RESIZES the input; it is NOT the reject-cap a host may apply to oversized uploads.
-    max_input_edge_px: int = 1280
+    # RESIZES the input; it is NOT the reject-cap a host may apply to oversized uploads. At this
+    # default value the detail-aware relax (#86) may lift it to _DETAIL_CAP_EDGE_PX for dense
+    # inputs; any explicit value (incl. 0) is honoured verbatim.
+    max_input_edge_px: int = _DEFAULT_INPUT_EDGE_PX
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.quality <= 1.0:
@@ -455,16 +503,32 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
     # trace on the flat/illustration target (excess resolution + JPEG/upscale noise fragment the
     # trace). LANCZOS, aspect-preserved, only when larger — never upscales. 0 disables.
     downscale_note: str | None = None
-    if opts.max_input_edge_px > 0 and max(image.size) > opts.max_input_edge_px:
+    # Detail-aware relax (#86): at the default cap, a detail-dense original (faces/stipple/hatch)
+    # would be shredded by the downscale, so lift the cap to _DETAIL_CAP_EDGE_PX. Only at the
+    # default — an explicit cap (any other value, incl. 0) is honoured verbatim.
+    effective_cap = opts.max_input_edge_px
+    detail_note = ""
+    if (
+        opts.max_input_edge_px == _DEFAULT_INPUT_EDGE_PX
+        and max(image.size) > _DEFAULT_INPUT_EDGE_PX
+    ):
+        fmd = _fine_mark_density(image)
+        if fmd >= _DETAIL_CAP_FMD_FLOOR:
+            effective_cap = _DETAIL_CAP_EDGE_PX
+            detail_note = (
+                f", detail-dense fmd={fmd:.1f}, cap relaxed "
+                f"{_DEFAULT_INPUT_EDGE_PX}->{_DETAIL_CAP_EDGE_PX}"
+            )
+    if effective_cap > 0 and max(image.size) > effective_cap:
         ow, oh = image.size
-        scale = opts.max_input_edge_px / max(ow, oh)
+        scale = effective_cap / max(ow, oh)
         new_size = (max(1, round(ow * scale)), max(1, round(oh * scale)))
         src_format = getattr(image, "format", None)
         image = image.resize(new_size, Image.Resampling.LANCZOS)
         image.format = src_format  # keep the source-format hint for the lossy-denoise gate (#71)
         downscale_note = (
             f"input downscaled {ow}x{oh} -> {new_size[0]}x{new_size[1]} "
-            f"(max_input_edge_px={opts.max_input_edge_px})"
+            f"(max_input_edge_px={effective_cap}{detail_note})"
         )
 
     classification = _resolve_classification(image, opts.mode)

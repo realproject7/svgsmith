@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from svgsmith.classify import PHOTO_WARNING
-from svgsmith.pipeline import ConvertOptions, convert
+from svgsmith.pipeline import (
+    _DEFAULT_INPUT_EDGE_PX,
+    _DETAIL_CAP_EDGE_PX,
+    _DETAIL_CAP_FMD_FLOOR,
+    ConvertOptions,
+    _fine_mark_density,
+    convert,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ALL_FIXTURES = ["logo.png", "illustration.png", "icon.png", "pixel.png", "photo.png"]
@@ -396,3 +403,59 @@ def test_max_input_edge_px_downscales_large_input(tmp_path):
 
     with pytest.raises(ValueError):
         ConvertOptions(max_input_edge_px=-1)
+
+
+def _dot_field(w, h, n, seed):
+    """A smooth field scattered with small (3px) dots — the isolated 2-300px "fine marks" the #86
+    detector counts. (Per-pixel noise instead forms one giant component and scores ~0.)"""
+    import numpy as np
+    from PIL import Image
+
+    arr = np.full((h, w, 3), 185, np.uint8)
+    rng = np.random.default_rng(seed)
+    for x, y in zip(rng.integers(0, w - 3, n), rng.integers(0, h - 3, n), strict=True):
+        arr[y : y + 3, x : x + 3] = 30
+    return Image.fromarray(arr, "RGB")
+
+
+def test_fine_mark_density_separates_flat_from_dense():
+    """#86 detector: a flat region scores ~0; fine high-frequency texture scores above the floor."""
+    from PIL import Image
+
+    flat = Image.new("RGB", (640, 640), (180, 90, 60))
+    assert _fine_mark_density(flat) < _DETAIL_CAP_FMD_FLOOR
+    assert _fine_mark_density(_dot_field(640, 640, 900, 0)) > _DETAIL_CAP_FMD_FLOOR
+
+
+def test_detail_aware_cap_holds_default_for_flat_and_honours_override(tmp_path):
+    """#86: an over-cap FLAT input keeps the default cap (byte-identity direction preserved), and an
+    explicit --max-input-edge-px bypasses the heuristic entirely (user override wins)."""
+    from PIL import Image
+
+    flat = tmp_path / "flat_big.png"
+    Image.new("RGB", (1600, 1600), (200, 120, 80)).save(flat)
+
+    _, r_default = convert(str(flat), ConvertOptions(max_iters=1))
+    assert any(f"max_input_edge_px={_DEFAULT_INPUT_EDGE_PX})" in w for w in r_default.warnings)
+    assert not any("relaxed" in w for w in r_default.warnings)
+
+    _, r_expl = convert(str(flat), ConvertOptions(max_input_edge_px=1400, max_iters=1))
+    assert any("max_input_edge_px=1400)" in w for w in r_expl.warnings)
+    assert not any("relaxed" in w for w in r_expl.warnings)
+
+
+def test_detail_aware_cap_relaxes_for_dense_over_cap_input(tmp_path):
+    """#86: a detail-dense over-cap input relaxes past the default cap. A 1400px dense strip relaxes
+    to _DETAIL_CAP_EDGE_PX (>1400) so it is NOT downscaled to 1280, whereas a flat strip is."""
+    from PIL import Image
+
+    assert _DETAIL_CAP_EDGE_PX > 1400  # premise: relaxed cap leaves a 1400px input un-downscaled
+    dense = tmp_path / "dense_strip.png"
+    _dot_field(1400, 80, 300, 2).save(dense)
+    _, r_dense = convert(str(dense), ConvertOptions(max_iters=1))
+    assert not any("downscaled" in w for w in r_dense.warnings)  # relaxed -> stays full-res
+
+    flat = tmp_path / "flat_strip.png"
+    Image.new("RGB", (1400, 80), (150, 60, 30)).save(flat)
+    _, r_flat = convert(str(flat), ConvertOptions(max_iters=1))
+    assert any("downscaled 1400x80 -> 1280" in w for w in r_flat.warnings)  # control: capped
