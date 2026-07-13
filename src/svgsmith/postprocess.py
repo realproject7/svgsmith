@@ -3,7 +3,7 @@
 Turns tracer "path soup" into editable SVG: simplified paths (Douglas-Peucker
 over flattened geometry), readable ``<g>`` layers grouped by fill, and a
 consolidated palette. Operates on the SVG through a real XML parser
-(:mod:`xml.etree.ElementTree`), never regex, and parses path ``d`` data with a
+(:mod:`defusedxml.ElementTree`), never regex, and parses path ``d`` data with a
 small dedicated parser.
 
 This module exposes an explicit ``simplify_level`` and never calls the verify
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
+from defusedxml import ElementTree as DefusedET
 
 SVG_NS = "http://www.w3.org/2000/svg"
 _NUMBER = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
@@ -468,7 +469,7 @@ def _emit_d(subpaths: list[_Subpath], precision: int) -> str:
 def postprocess(svg_str: str, opts: PostprocessOptions | None = None) -> str:
     """Return an editable SVG: simplified paths, grouped layers, merged palette."""
     opts = opts or PostprocessOptions()
-    source = ET.fromstring(svg_str)
+    source = DefusedET.fromstring(svg_str)
     geom_width, geom_height = _geometry_size(source)
     diagonal = (geom_width**2 + geom_height**2) ** 0.5
     epsilon = opts.simplify_level * diagonal * opts.epsilon_ratio
@@ -596,7 +597,7 @@ def snap_background_layer(svg_str: str, coverage: float = 0.9) -> str:
     else paints on top, so the visible fill is unchanged where the subject covers
     it. A no-op when no path covers ``coverage`` of the canvas (e.g. line art).
     """
-    root = ET.fromstring(svg_str)
+    root = DefusedET.fromstring(svg_str)
     width, height = _geometry_size(root)
     paths = _collect_paths(root)
     _snap_canvas_background(paths, width, height, coverage)
@@ -680,7 +681,7 @@ def _append_path(parent: ET.Element, path: dict, include_fill: bool) -> None:
 
 def count_path_points(svg_str: str) -> int:
     """Total on-curve anchor points (start + one per segment) across all paths."""
-    root = ET.fromstring(svg_str)
+    root = DefusedET.fromstring(svg_str)
     return sum(
         1 + len(sub.segments)
         for p in _collect_paths(root)
@@ -711,7 +712,7 @@ def drop_background_paths(svg_str: str, bg_mask: np.ndarray) -> str:
     rectangle) or when most of its sampled points fall in the background —
     region-based, so a subject that shares the background colour is kept.
     """
-    root = ET.fromstring(svg_str)
+    root = DefusedET.fromstring(svg_str)
     geom_w, geom_h = _geometry_size(root)
     if not (geom_w and geom_h):
         return svg_str
@@ -785,7 +786,7 @@ def global_same_fill_merge(svg_str: str, precision: int = 2) -> str:
     path carries a non-translate transform (baking would break a scaled/flipped shape) or
     when every fill is already unique (nothing to merge).
     """
-    root = ET.fromstring(svg_str)
+    root = DefusedET.fromstring(svg_str)
     paths = _collect_paths(root)
     if not paths:
         return svg_str
@@ -811,7 +812,7 @@ def global_same_fill_merge(svg_str: str, precision: int = 2) -> str:
 
 def svg_bbox(svg_str: str, samples: int = 18) -> tuple[float, float, float, float] | None:
     """Overall geometry bounding box ``(minx, miny, maxx, maxy)``, or None."""
-    root = ET.fromstring(svg_str)
+    root = DefusedET.fromstring(svg_str)
     xs: list[float] = []
     ys: list[float] = []
     for path in _collect_paths(root):
