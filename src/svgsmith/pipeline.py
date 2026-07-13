@@ -282,12 +282,14 @@ def _path_wobble(svg: str) -> float:
     """
     import math
     import re
-    import xml.etree.ElementTree as ET
+
+    from defusedxml import ElementTree as ET
+    from defusedxml.common import DefusedXmlException
 
     num = r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
     try:
         root = ET.fromstring(svg)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return 0.0
     flips = 0.0
     length = 0.0

@@ -9,8 +9,9 @@ reads — do not rename them.
 from __future__ import annotations
 
 import json
-import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
+
+from defusedxml import ElementTree as DefusedET
 
 SVG_NS = "http://www.w3.org/2000/svg"
 
@@ -48,7 +49,7 @@ class Report:
 
 def svg_stats(svg: str) -> SvgStats:
     """Compute path/group/color counts and byte size for an SVG string."""
-    root = ET.fromstring(svg)
+    root = DefusedET.fromstring(svg)
     paths = 0
     groups = 0
     colors: set[str] = set()

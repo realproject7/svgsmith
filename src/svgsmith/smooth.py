@@ -26,6 +26,7 @@ import math
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from defusedxml import ElementTree as DefusedET
 
 from svgsmith.postprocess import SVG_NS, _subpath_points, parse_path
 
@@ -452,7 +453,7 @@ def smooth_svg(
     (e.g. a 640px image traced at 2048 ≈ 3.2×, so ``.2f`` → ``.1f`` losslessly). Pass
     ``precision=None`` to auto-pick purely from the factor.
     """
-    root = ET.fromstring(svg)
+    root = DefusedET.fromstring(svg)
     diag = _diagonal(root)
     precision = _resolution_precision(root, native_long_edge, precision)
     tol = (tol_ratio * diag) ** 2  # _max_error works in squared distance
