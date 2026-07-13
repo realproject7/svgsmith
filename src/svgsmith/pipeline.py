@@ -24,7 +24,7 @@ from svgsmith.postprocess import (
 from svgsmith.preprocess import PreprocessOptions, _edge_flood_fill_mask, preprocess
 from svgsmith.report import Report, svg_stats
 from svgsmith.smooth import smooth_svg
-from svgsmith.verify import rasterize, run_loop, score
+from svgsmith.verify import color_error, rasterize, run_loop, score
 
 _DEFAULT_BG_TOLERANCE = PreprocessOptions().background_tolerance
 
@@ -792,6 +792,14 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         svg = snap_background_layer(svg)
 
     output = _output_path(input_path, opts.out)
+    # Color-fidelity channel (#37): one extra rasterize of the final SVG. Reported only —
+    # the loop still optimizes SSIM; blending/recalibration is a gated follow-up.
+    try:
+        ref_rgb = load_image(image, "RGB")
+        report_color_error = color_error(ref_rgb, rasterize(svg, ref_rgb.size))
+    except Exception:
+        report_color_error = None
+
     report = Report(
         output=output,
         mode_used=classification.mode,
@@ -799,6 +807,7 @@ def convert(input_path: str, opts: ConvertOptions | None = None) -> tuple[str, R
         preset=classification.preset,
         iterations=iterations,
         similarity=similarity,
+        color_error=None if report_color_error is None else round(report_color_error, 3),
         passed_threshold=similarity >= opts.quality,
         svg=svg_stats(svg),
         warnings=list(classification.warnings) + ([downscale_note] if downscale_note else []),

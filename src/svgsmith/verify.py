@@ -85,6 +85,33 @@ def score(original: Image.Image, rendered: Image.Image) -> float:
     return float(structural_similarity(a, b, channel_axis=2))
 
 
+_COLOR_ERROR_SAMPLE_EDGE = 256  # ΔE analysis long-edge (downsample for speed)
+
+
+def color_error(original: Image.Image, rendered: Image.Image) -> float:
+    """Mean perceptual color distance (CIE76 ΔE in Lab) between two images.
+
+    The color-fidelity channel SSIM lacks (#37): SSIM is largely structural and
+    scored a shiba with a missing face 0.923 and ignored red→brown shifts. This
+    metric is REPORTED alongside similarity (not yet blended into the loop's
+    score — that recalibration is gated). ~0-2 imperceptible, >6 a clearly
+    visible shift. Computed at a 256px long-edge downsample.
+    """
+    from skimage.color import rgb2lab
+
+    if rendered.size != original.size:
+        rendered = rendered.resize(original.size)
+    w, h = original.size
+    scale = _COLOR_ERROR_SAMPLE_EDGE / max(w, h)
+    if scale < 1.0:
+        size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        original = original.resize(size, Image.LANCZOS)
+        rendered = rendered.resize(size, Image.LANCZOS)
+    a = rgb2lab(np.asarray(original.convert("RGB"), dtype=np.float64) / 255.0)
+    b = rgb2lab(np.asarray(rendered.convert("RGB"), dtype=np.float64) / 255.0)
+    return float(np.linalg.norm(a - b, axis=-1).mean())
+
+
 def _tune_preset(base: Preset, color_level: int) -> Preset:
     """Trace at full color fidelity from the first pass; recover detail over iters.
 

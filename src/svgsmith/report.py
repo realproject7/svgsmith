@@ -38,6 +38,9 @@ class Report:
     similarity: float
     passed_threshold: bool
     svg: SvgStats
+    # Mean perceptual color distance (ΔE Lab) vs the original (#37) — the color-fidelity
+    # channel SSIM is blind to. Reported for gates/inspection; not yet part of pass/fail.
+    color_error: float | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
