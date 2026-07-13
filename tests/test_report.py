@@ -45,6 +45,7 @@ def test_report_serializes_exact_contract_fields():
         "similarity",
         "passed_threshold",
         "svg",
+        "color_error",
         "warnings",
     ]
     assert list(data["svg"].keys()) == ["paths", "groups", "colors", "bytes"]
@@ -64,3 +65,33 @@ def test_report_to_json_is_parseable():
     )
     assert json.loads(report.to_json())["engine"] == "potrace"
     assert report.warnings == []
+
+
+def test_color_error_metric_catches_color_shift_ssim_misses():
+    """#37: mean ΔE flags a pure color shift; identical images score ~0. (Reported channel —
+    the loop's similarity/pass logic is unchanged.)"""
+    import numpy as np
+    from PIL import Image
+
+    from svgsmith.verify import color_error
+
+    base = np.zeros((120, 120, 3), np.uint8)
+    base[:] = (200, 40, 40)  # red card
+    red = Image.fromarray(base, "RGB")
+    shifted = Image.fromarray(np.roll(base, 1, axis=2), "RGB")  # same structure, blue-ish
+
+    assert color_error(red, red.copy()) < 0.5
+    shift_de = color_error(red, shifted)
+    assert shift_de > 20  # violent hue shift = large ΔE
+
+
+def test_report_carries_color_error(tmp_path):
+    from PIL import Image
+
+    from svgsmith.pipeline import ConvertOptions, convert
+
+    src = tmp_path / "flat.png"
+    Image.new("RGB", (200, 200), (30, 120, 200)).save(src)
+    _, report = convert(str(src), ConvertOptions(max_iters=1))
+    assert report.color_error is not None and report.color_error < 6.0
+    assert "color_error" in report.to_json()
